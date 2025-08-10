@@ -39,6 +39,17 @@ from flask_login import (
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 
+# --- Optional: load env vars from .env or secret files (Render) ---
+try:
+    from dotenv import load_dotenv, find_dotenv
+    # Load .env from project root if present
+    load_dotenv(find_dotenv(), override=True)
+    # Load secret file if Render Secret Files mounted at this path
+    if os.path.exists('/etc/secrets/.env'):
+        load_dotenv('/etc/secrets/.env', override=True)
+except Exception:
+    pass
+
 # ------------------------------
 # App & Config
 # ------------------------------
