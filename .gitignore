@@ -1,0 +1,6 @@
+uploads/
+instance/
+__pycache__/
+*.pyc
+memo_demo.db
+.env
