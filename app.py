@@ -235,7 +235,7 @@ def _load_villas() -> list:
     """
     raw = os.environ.get('VILLA_NAMES', '').strip()
     if raw:
-        # Split by commas and/or newlines safely
+        # Split by commas and/or newlines safely (use escaped literals!)
         tmp = raw.replace('', '
 ').replace(',', '
 ')
@@ -275,6 +275,7 @@ def _load_villas() -> list:
     return names
 
 VILLAS = _load_villas()
+
 
 
 
