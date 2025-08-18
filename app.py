@@ -17,6 +17,7 @@ Demo seed:
 Notes:
 - Single-file app. Templates inline with Bootstrap 5.
 - Images saved to ./uploads. Basic i18n via ?lang=zh|ja|en (cookie persisted).
+- Villa names are configurable via env var `VILLA_NAMES` (comma or newline separated). On Render, use **Secret Files** `.env`.
 - Password hashing uses pbkdf2:sha256 to avoid scrypt dependency.
 """
 
@@ -115,6 +116,8 @@ I18N: Dict[str, Dict[str, str]] = {
         'switch_lang': '語言',
         'welcome_msg': '今日待辦與提醒',
         'upload_ok': '已上傳',
+        'sop_by_villa': '各別墅 SOP 快捷',
+        'all_villas': '全部別墅',
     },
     'ja': {
         'app_title': 'ヴィラ・スタッフ・メモ',
@@ -154,6 +157,8 @@ I18N: Dict[str, Dict[str, str]] = {
         'switch_lang': '言語',
         'welcome_msg': '本日のタスクとリマインド',
         'upload_ok': 'アップロードしました',
+        'sop_by_villa': 'ヴィラ別 SOP ショートカット',
+        'all_villas': 'すべてのヴィラ',
     },
     'en': {
         'app_title': 'Villa Staff Memo',
@@ -193,6 +198,8 @@ I18N: Dict[str, Dict[str, str]] = {
         'switch_lang': 'Language',
         'welcome_msg': "Today's todos & reminders",
         'upload_ok': 'Uploaded',
+        'sop_by_villa': 'SOP by Villa',
+        'all_villas': 'All Villas',
     }
 }
 
@@ -211,7 +218,62 @@ def t(key: str) -> str:
 
 def with_lang(url: str) -> str:
     lang = _get_lang()
-    return f"{url}?lang={lang}" if lang else url
+    sep = '&' if ('?' in url) else '?'
+    return f"{url}{sep}lang={lang}" if lang else url
+
+
+# Villas list (24) — configurable via env var VILLA_NAMES (comma or newline separated)
+# Example in .env / Secret File:
+# VILLA_NAMES=Sunset,Aqua,Coral,Emerald,...(24 names)
+
+def _load_villas() -> list:
+    """Return 24 villa names.
+    Priority: env var VILLA_NAMES (comma/newline separated) →
+    fallback to the custom default list below (your provided names),
+    then pad/truncate to exactly 24.
+    """
+    raw = os.environ.get('VILLA_NAMES', '').strip()
+    if raw:
+        names: list[str] = []
+        # support both comma- and newline-separated formats
+        for line in raw.replace('', '
+').split('
+'):
+            names += [p.strip() for p in line.split(',') if p.strip()]
+    else:
+        # ← Default list from your request (22 names)
+        names = [
+            "Grand Villa",
+            "Villa A",
+            "Villa B",
+            "Villa C",
+            "Panorama Villa",
+            "Sankando Office",
+            "Glamping Office",
+            "MOKA",
+            "KOKO",
+            "MARU",
+            "RUNA",
+            "MEI",
+            "RIN",
+            "LEO",
+            "MOMO",
+            "New DOME",
+            "CUBE",
+            "Gekkouen",
+            "Villa D",
+            "Villa E",
+            "Villa F",
+            "Villa G",
+        ]
+    # normalize to exactly 24 entries: trim extra or pad with placeholders
+    names = names[:24]
+    if len(names) < 24:
+        start = len(names) + 1
+        names += [f"Villa {i:02d}" for i in range(start, 25)]
+    return names
+
+VILLAS = _load_villas()
 
 
 # ------------------------------
@@ -339,6 +401,23 @@ DASH = """
 {% extends 'BASE' %}
 {% block body %}
   <div class="row g-3">
+    <div class="col-12">
+      <div class="card shadow-sm">
+        <div class="card-body">
+          <h5 class="card-title">{{ t('sop_by_villa') }}</h5>
+          <div class="row row-cols-2 row-cols-sm-3 row-cols-md-4 row-cols-lg-6 g-2">
+            <div class="col">
+              <a class="btn btn-outline-secondary w-100" href="{{ with_lang(url_for('list_sops')) }}">{{ t('all_villas') }}</a>
+            </div>
+            {% for v in villas %}
+            <div class="col">
+              <a class="btn btn-outline-primary w-100" href="{{ with_lang(url_for('list_sops', villa=v)) }}">{{ v }}</a>
+            </div>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+    </div>
     <div class="col-md-6">
       <div class="card shadow-sm">
         <div class="card-body">
@@ -398,7 +477,7 @@ SOPS = """
 {% extends 'BASE' %}
 {% block body %}
 <div class="d-flex justify-content-between align-items-center mb-2">
-  <h4>{{ t('sops') }}</h4>
+  <h4>{{ t('sops') }}{% if villa %} — {{ villa }}{% endif %}</h4>
   <a class="btn btn-primary" href="{{ with_lang(url_for('new_sop')) }}">＋ {{ t('new_sop') }}</a>
 </div>
 <div class="list-group">
@@ -627,15 +706,16 @@ def logout():
 def dashboard():
     tasks = Task.query.order_by(Task.created_at.desc()).limit(10).all()
     checks = Check.query.order_by(Check.created_at.desc()).limit(10).all()
-    return render_template('DASH', tasks=tasks, checks=checks)
+    return render_template('DASH', tasks=tasks, checks=checks, villas=VILLAS)
 
 
 # ---- SOPs ----
 @app.route('/sops')
 @login_required
 def list_sops():
+    villa = request.args.get('villa')
     sops = SOP.query.order_by(SOP.created_at.desc()).all()
-    return render_template('SOPS', sops=sops)
+    return render_template('SOPS', sops=sops, villa=villa)
 
 
 @app.route('/sops/new', methods=['GET', 'POST'])
