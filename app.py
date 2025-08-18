@@ -235,7 +235,7 @@ def _load_villas() -> list:
     """
     raw = os.environ.get('VILLA_NAMES', '').strip()
     if raw:
-        # Avoid regex to prevent any accidental newline issues
+        # Split by commas and/or newlines safely
         tmp = raw.replace('', '
 ').replace(',', '
 ')
@@ -306,7 +306,7 @@ class SOP(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 
-class Task(db.Model):(db.Model):
+class Task(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     title = db.Column(db.String(200), nullable=False)
     status = db.Column(db.String(20), default='pending')  # pending/in_progress/done
