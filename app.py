@@ -26,6 +26,7 @@ import os
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict
+import re
 
 from flask import (
     Flask, request, redirect, url_for, flash, send_from_directory,
@@ -234,12 +235,12 @@ def _load_villas() -> list:
     """
     raw = os.environ.get('VILLA_NAMES', '').strip()
     if raw:
-        names: list[str] = []
-        # support both comma- and newline-separated formats
-        for line in raw.replace('', '
-').split('
-'):
-            names += [p.strip() for p in line.split(',') if p.strip()]
+        # Avoid regex to prevent any accidental newline issues
+        tmp = raw.replace('', '
+').replace(',', '
+')
+        names = [n.strip() for n in tmp.split('
+') if n.strip()]
     else:
         # ← Default list from your request (22 names)
         names = [
@@ -276,6 +277,8 @@ def _load_villas() -> list:
 VILLAS = _load_villas()
 
 
+
+
 # ------------------------------
 # Models
 # ------------------------------
@@ -299,10 +302,11 @@ class SOP(db.Model):
     title = db.Column(db.String(200), nullable=False)
     category = db.Column(db.String(80), nullable=False)
     content = db.Column(db.Text, nullable=False)
+    villa = db.Column(db.String(80), nullable=True, index=True)  # NEW: per-villa routing
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 
-class Task(db.Model):
+class Task(db.Model):(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     title = db.Column(db.String(200), nullable=False)
     status = db.Column(db.String(20), default='pending')  # pending/in_progress/done
@@ -478,14 +482,25 @@ SOPS = """
 {% block body %}
 <div class="d-flex justify-content-between align-items-center mb-2">
   <h4>{{ t('sops') }}{% if villa %} — {{ villa }}{% endif %}</h4>
-  <a class="btn btn-primary" href="{{ with_lang(url_for('new_sop')) }}">＋ {{ t('new_sop') }}</a>
+  <div class="d-flex gap-2">
+    <form class="d-flex" method="get" action="{{ url_for('list_sops') }}">
+      <input type="hidden" name="lang" value="{{ request.args.get('lang') or request.cookies.get('lang') or 'zh' }}">
+      <select class="form-select me-2" name="villa" onchange="this.form.submit()">
+        <option value="">{{ t('all_villas') }}</option>
+        {% for v in villas %}
+        <option value="{{ v }}" {% if villa==v %}selected{% endif %}>{{ v }}</option>
+        {% endfor %}
+      </select>
+    </form>
+    <a class="btn btn-primary" href="{{ with_lang(url_for('new_sop', villa=villa)) }}">＋ {{ t('new_sop') }}</a>
+  </div>
 </div>
 <div class="list-group">
   {% for s in sops %}
   <a class="list-group-item list-group-item-action" href="{{ with_lang(url_for('edit_sop', sop_id=s.id)) }}">
     <div class="d-flex w-100 justify-content-between">
       <h5 class="mb-1">{{ s.title }}</h5>
-      <small class="text-muted">{{ s.category }}</small>
+      <small class="text-muted">{{ s.category }}{% if s.villa %} ｜ {{ s.villa }}{% endif %}</small>
     </div>
     <p class="mb-1 text-muted">{{ s.content[:120] }}{% if s.content|length>120 %}...{% endif %}</p>
   </a>
@@ -508,6 +523,15 @@ SOP_FORM = """
   <div class="mb-3">
     <label class="form-label">{{ t('category') }}</label>
     <input name="category" class="form-control" value="{{ sop.category if sop else '' }}" required>
+  </div>
+  <div class="mb-3">
+    <label class="form-label">{{ t('villa') }}</label>
+    <select name="villa" class="form-select">
+      <option value="">—</option>
+      {% for v in villas %}
+      <option value="{{ v }}" {% if (sop and sop.villa==v) or (not sop and request.args.get('villa')==v) %}selected{% endif %}>{{ v }}</option>
+      {% endfor %}
+    </select>
   </div>
   <div class="mb-3">
     <label class="form-label">{{ t('content') }}</label>
@@ -656,6 +680,10 @@ app.jinja_loader = DictLoader({
 # ------------------------------
 # Routes
 # ------------------------------
+@app.route('/health')
+def health():
+    return 'ok', 200
+
 @app.before_request
 def persist_lang_cookie_and_auto_login():
     # Record language to set cookie later (handled by a single global after_request)
@@ -713,20 +741,28 @@ def dashboard():
 @app.route('/sops')
 @login_required
 def list_sops():
-    villa = request.args.get('villa')
-    sops = SOP.query.order_by(SOP.created_at.desc()).all()
-    return render_template('SOPS', sops=sops, villa=villa)
+    villa = request.args.get('villa') or None
+    q = SOP.query
+    if villa:
+        q = q.filter(SOP.villa == villa)
+    sops = q.order_by(SOP.created_at.desc()).all()
+    return render_template('SOPS', sops=sops, villa=villa, villas=VILLAS)
 
 
 @app.route('/sops/new', methods=['GET', 'POST'])
 @login_required
 def new_sop():
     if request.method == 'POST':
-        s = SOP(title=request.form['title'], category=request.form['category'], content=request.form['content'])
+        s = SOP(
+            title=request.form['title'],
+            category=request.form['category'],
+            content=request.form['content'],
+            villa=(request.form.get('villa') or None),
+        )
         db.session.add(s)
         db.session.commit()
-        return redirect(with_lang(url_for('list_sops')))
-    return render_template('SOP_FORM', sop=None)
+        return redirect(with_lang(url_for('list_sops', villa=s.villa)))
+    return render_template('SOP_FORM', sop=None, villas=VILLAS)
 
 
 @app.route('/sops/<int:sop_id>/edit', methods=['GET', 'POST'])
@@ -737,9 +773,10 @@ def edit_sop(sop_id):
         s.title = request.form['title']
         s.category = request.form['category']
         s.content = request.form['content']
+        s.villa = request.form.get('villa') or None
         db.session.commit()
-        return redirect(with_lang(url_for('list_sops')))
-    return render_template('SOP_FORM', sop=s)
+        return redirect(with_lang(url_for('list_sops', villa=s.villa)))
+    return render_template('SOP_FORM', sop=s, villas=VILLAS)
 
 
 # ---- Tasks ----
@@ -881,6 +918,7 @@ def seed():
             SOP(
                 title='客房清潔（退房）',
                 category='清潔',
+                villa=(VILLAS[0] if VILLAS else None),
                 content="""1) 換床品
 2) 吸塵與拖地
 3) 垃圾清理
@@ -889,6 +927,7 @@ def seed():
             SOP(
                 title='花園巡檢',
                 category='園藝',
+                villa=(VILLAS[1] if len(VILLAS) > 1 else None),
                 content="""1) 除草
 2) 澆水
 3) 確認照明
@@ -910,6 +949,14 @@ def seed():
 # Ensure DB exists and seeded on first run
 with app.app_context():
     db.create_all()
+    # Lightweight migration: ensure sop.villa column exists and index created
+    try:
+        cols = [r[1] for r in db.engine.execute("PRAGMA table_info(sop)").fetchall()]
+        if 'villa' not in cols:
+            db.engine.execute("ALTER TABLE sop ADD COLUMN villa VARCHAR(80)")
+        db.engine.execute("CREATE INDEX IF NOT EXISTS ix_sop_villa ON sop (villa)")
+    except Exception as e:
+        print('DB migration check failed:', e)
     seed()
 
 
