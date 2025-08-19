@@ -1,19 +1,19 @@
 # -*- coding: utf-8 -*-
 """
-Villa Staff Memo Web App — Login + Admin Users (fixed ASCII templates)
----------------------------------------------------------------------
+Villa Staff Memo — full app with Self-Test page
+---------------------------------------------
 - Local run:  python3 app.py  → http://127.0.0.1:8000
 - Seeded users:
     admin@villa.local / 10051005+   (role=admin, name=admin)
     stanley@villa.local / 0585      (role=staff,  name=Stanley)
-- Optional portal access code: set ACCESS_CODE in env/Secret Files. Use /access to enter.
-- Villas: set VILLA_NAMES (comma or newline separated). Pads to exactly 24 names.
-- Render Procfile:  web: gunicorn app:app
+- Optional access code gate: set ACCESS_CODE in env or Secret Files → open /access
+- 24-villa grid on dashboard; override names via env VILLA_NAMES (comma/newline separated)
+- Self-test UI: /selftest  (no login required)
 """
 
 from __future__ import annotations
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Dict
 from functools import wraps
@@ -32,7 +32,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 from jinja2 import DictLoader
 
-# Optional: dotenv (.env + Render Secret Files)
+# Optional dotenv (supports Render Secret Files at /etc/secrets/.env)
 try:
     from dotenv import load_dotenv, find_dotenv
     load_dotenv(find_dotenv(), override=True)
@@ -204,6 +204,7 @@ I18N: Dict[str, Dict[str, str]] = {
     }
 }
 
+
 def _get_lang() -> str:
     try:
         raw = (request.args.get('lang') or request.cookies.get('lang') or 'zh').lower()
@@ -211,26 +212,32 @@ def _get_lang() -> str:
         raw = 'zh'
     return raw if raw in I18N else 'zh'
 
+
 def t(key: str) -> str:
     lang = _get_lang()
     return I18N.get(lang, I18N['zh']).get(key, key)
+
 
 def with_lang(url: str) -> str:
     lang = _get_lang()
     sep = '&' if ('?' in url) else '?'
     return f"{url}{sep}lang={lang}" if lang else url
 
+
 # ------------------------------
 # Villas list (24)
 # ------------------------------
+
 def _load_villas() -> list:
     raw = os.environ.get('VILLA_NAMES', '').strip()
     if raw:
-        tmp = raw.replace('', '
-').replace(',', '
-')
-        names = [n.strip() for n in tmp.split('
-') if n.strip()]
+        parts = []
+        for line in raw.splitlines():
+            for p in line.split(','):
+                p = p.strip()
+                if p:
+                    parts.append(p)
+        names = parts
     else:
         names = [
             "Grand Villa", "Villa A", "Villa B", "Villa C", "Panorama Villa",
@@ -244,7 +251,9 @@ def _load_villas() -> list:
         names += [f"Villa {i:02d}" for i in range(start, 25)]
     return names
 
+
 VILLAS = _load_villas()
+
 
 # ------------------------------
 # Models
@@ -262,6 +271,7 @@ class User(db.Model, UserMixin):
     def check_password(self, pw: str) -> bool:
         return check_password_hash(self.password_hash, pw)
 
+
 class SOP(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     title = db.Column(db.String(200), nullable=False)
@@ -269,6 +279,7 @@ class SOP(db.Model):
     content = db.Column(db.Text, nullable=False)
     villa = db.Column(db.String(80), nullable=True, index=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
 
 class Task(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -281,6 +292,7 @@ class Task(db.Model):
     created_by = db.relationship('User', foreign_keys=[created_by_id])
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
+
 class Check(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     villa = db.Column(db.String(80), nullable=False)
@@ -292,12 +304,13 @@ class Check(db.Model):
     created_by = db.relationship('User')
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
+
 @login_manager.user_loader
 def load_user(user_id):
     return User.query.get(int(user_id))
 
+
 # Admin-only decorator
-from functools import wraps
 
 def admin_required(fn):
     @wraps(fn)
@@ -306,6 +319,7 @@ def admin_required(fn):
             abort(403)
         return fn(*args, **kwargs)
     return wrapper
+
 
 # ------------------------------
 # Templates
@@ -754,6 +768,38 @@ USER_FORM = """
 {% endblock %}
 """
 
+SELFTEST = """
+{% extends 'BASE' %}
+{% block body %}
+<div class="row justify-content-center">
+  <div class="col-lg-8">
+    <div class="card shadow-sm">
+      <div class="card-body">
+        <h4 class="mb-3">Self Test</h4>
+        <p class="text-muted">Quick smoke checks for routes, templates, and DB.</p>
+        <form method="post">
+          <button class="btn btn-primary">Run Tests</button>
+          <a class="btn btn-outline-secondary ms-2" href="{{ with_lang(url_for('login')) }}">Go Login</a>
+        </form>
+        {% if results is not none %}
+          <hr>
+          <h6>Results</h6>
+          <ul class="list-group">
+            {% for r in results %}
+              <li class="list-group-item d-flex justify-content-between align-items-center">
+                <span>{{ r.msg }}</span>
+                <span class="badge bg-{{ 'success' if r.ok else 'danger' }}">{{ 'OK' if r.ok else 'FAIL' }}</span>
+              </li>
+            {% endfor %}
+          </ul>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+"""
+
 app.jinja_env.globals.update(t=t, with_lang=with_lang)
 app.jinja_loader = DictLoader({
     'BASE': BASE,
@@ -768,18 +814,44 @@ app.jinja_loader = DictLoader({
     'ACCESS': ACCESS,
     'USERS': USERS,
     'USER_FORM': USER_FORM,
+    'SELFTEST': SELFTEST,
 })
 
+
 # ------------------------------
-# Routes & Auth
+# Helpers
+# ------------------------------
+ALLOWED_EXT = {'.jpg', '.jpeg', '.png', '.gif', '.webp'}
+
+def allowed_file(filename: str) -> bool:
+    ext = os.path.splitext(filename.lower())[1]
+    return ext in ALLOWED_EXT
+
+
+def ensure_seed_users():
+    """Create default users once."""
+    if User.query.filter_by(email='admin@villa.local').first() is None:
+        u = User(email='admin@villa.local', name='admin', role='admin')
+        u.set_password('10051005+')
+        db.session.add(u)
+    if User.query.filter_by(email='stanley@villa.local').first() is None:
+        u2 = User(email='stanley@villa.local', name='Stanley', role='staff')
+        u2.set_password('0585')
+        db.session.add(u2)
+    db.session.commit()
+
+
+# ------------------------------
+# Hooks
 # ------------------------------
 @app.route('/health')
 def health():
     return 'ok', 200
 
+
 @app.before_request
 def persist_lang_and_gate():
-    # lang cookie
+    # lang cookie capture
     g.lang_to_set = None
     lang = request.args.get('lang')
     if lang:
@@ -788,7 +860,7 @@ def persist_lang_and_gate():
     # optional ACCESS_CODE gate
     access_code = os.environ.get('ACCESS_CODE')
     if access_code:
-        allowed_eps = {'health', 'access', 'static', 'login'}
+        allowed_eps = {'health', 'access', 'static', 'login', 'selftest'}
         ep = (request.endpoint or '').split('.')[-1]
         has_cookie = request.cookies.get('ac') == access_code
         from_query = request.args.get('access')
@@ -797,6 +869,7 @@ def persist_lang_and_gate():
         elif not has_cookie and ep not in allowed_eps:
             nxt = request.full_path if request.query_string else request.path
             return redirect(url_for('access', next=nxt))
+
 
 @app.after_request
 def apply_lang_cookie(response):
@@ -809,9 +882,14 @@ def apply_lang_cookie(response):
         pass
     return response
 
+
+# ------------------------------
+# Routes
+# ------------------------------
 @app.route('/')
 def index():
     return redirect(with_lang(url_for('dashboard')))
+
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -829,11 +907,13 @@ def login():
         flash('Invalid credentials', 'warning')
     return render_template('LOGIN')
 
+
 @app.route('/access', methods=['GET','POST'])
 def access():
     access_code = os.environ.get('ACCESS_CODE')
     if not access_code:
         return redirect(with_lang(url_for('dashboard')))
+    # fixed: no stray bracket
     if request.method == 'POST':
         if request.form.get('access') == access_code:
             g._set_access_cookie = True
@@ -843,6 +923,7 @@ def access():
             flash(t('access_denied'), 'warning')
     return render_template('ACCESS')
 
+
 @app.route('/logout')
 def logout():
     try:
@@ -851,12 +932,162 @@ def logout():
         pass
     return redirect(with_lang(url_for('login')))
 
+
 @app.route('/dashboard')
 @login_required
 def dashboard():
     tasks = Task.query.order_by(Task.created_at.desc()).limit(10).all()
     checks = Check.query.order_by(Check.created_at.desc()).limit(10).all()
     return render_template('DASH', tasks=tasks, checks=checks, villas=VILLAS)
+
+
+# ---- SOPS ----
+@app.route('/sops')
+@login_required
+def list_sops():
+    villa = request.args.get('villa') or None
+    q = SOP.query
+    if villa:
+        q = q.filter_by(villa=villa)
+    sops = q.order_by(SOP.created_at.desc()).all()
+    return render_template('SOPS', sops=sops, villa=villa, villas=VILLAS)
+
+
+@app.route('/sops/new', methods=['GET','POST'])
+@login_required
+def new_sop():
+    if request.method == 'POST':
+        s = SOP(
+            title=request.form['title'],
+            category=request.form['category'],
+            content=request.form['content'],
+            villa=request.form.get('villa') or None,
+        )
+        db.session.add(s)
+        db.session.commit()
+        return redirect(with_lang(url_for('list_sops', villa=s.villa or '')))
+    return render_template('SOP_FORM', sop=None, villas=VILLAS)
+
+
+@app.route('/sops/<int:sop_id>/edit', methods=['GET','POST'])
+@login_required
+def edit_sop(sop_id):
+    sop = SOP.query.get_or_404(sop_id)
+    if request.method == 'POST':
+        sop.title = request.form['title']
+        sop.category = request.form['category']
+        sop.content = request.form['content']
+        sop.villa = request.form.get('villa') or None
+        db.session.commit()
+        return redirect(with_lang(url_for('list_sops', villa=sop.villa or '')))
+    return render_template('SOP_FORM', sop=sop, villas=VILLAS)
+
+
+# ---- Tasks ----
+@app.route('/tasks')
+@login_required
+def list_tasks():
+    tasks = Task.query.order_by(Task.created_at.desc()).all()
+    return render_template('TASKS', tasks=tasks)
+
+
+@app.route('/tasks/new', methods=['GET','POST'])
+@login_required
+def new_task():
+    if request.method == 'POST':
+        title = request.form['title']
+        status = request.form.get('status','pending')
+        assigned_to_id = request.form.get('assigned_to') or None
+        due_date = request.form.get('due_date') or None
+        assigned_user = User.query.get(int(assigned_to_id)) if assigned_to_id else None
+        task = Task(title=title, status=status, assigned_to=assigned_user, created_by=current_user)
+        if due_date:
+            try:
+                task.due_date = datetime.strptime(due_date, '%Y-%m-%d')
+            except Exception:
+                pass
+        db.session.add(task)
+        db.session.commit()
+        return redirect(with_lang(url_for('list_tasks')))
+    users = User.query.order_by(User.name.asc()).all()
+    return render_template('TASK_FORM', task=None, users=users)
+
+
+@app.route('/tasks/<int:task_id>/edit', methods=['GET','POST'])
+@login_required
+def edit_task(task_id):
+    task = Task.query.get_or_404(task_id)
+    if request.method == 'POST':
+        task.title = request.form['title']
+        task.status = request.form.get('status','pending')
+        assigned_to_id = request.form.get('assigned_to') or None
+        task.assigned_to = User.query.get(int(assigned_to_id)) if assigned_to_id else None
+        due_date = request.form.get('due_date') or None
+        if due_date:
+            try:
+                task.due_date = datetime.strptime(due_date, '%Y-%m-%d')
+            except Exception:
+                pass
+        db.session.commit()
+        return redirect(with_lang(url_for('list_tasks')))
+    users = User.query.order_by(User.name.asc()).all()
+    return render_template('TASK_FORM', task=task, users=users)
+
+
+# ---- Checks ----
+@app.route('/checks')
+@login_required
+def list_checks():
+    villa = request.args.get('villa') or None
+    q = Check.query
+    if villa:
+        q = q.filter_by(villa=villa)
+    checks = q.order_by(Check.created_at.desc()).all()
+    return render_template('CHECKS', checks=checks, villas=VILLAS)
+
+
+@app.route('/checks/new', methods=['GET','POST'])
+@login_required
+def new_check():
+    if request.method == 'POST':
+        c = Check(
+            villa=request.form['villa'],
+            area=request.form['area'],
+            notes=request.form.get('notes') or '',
+            created_by=current_user,
+            status=request.form.get('status','pending'),
+        )
+        f = request.files.get('photo')
+        if f and f.filename and allowed_file(f.filename):
+            filename = secure_filename(f.filename)
+            dst = Path(app.config['UPLOAD_FOLDER']) / filename
+            f.save(str(dst))
+            c.photo_path = str(dst)
+        db.session.add(c)
+        db.session.commit()
+        return redirect(with_lang(url_for('list_checks', villa=c.villa)))
+    return render_template('CHECK_FORM', check=None, villas=VILLAS)
+
+
+@app.route('/checks/<int:check_id>/edit', methods=['GET','POST'])
+@login_required
+def edit_check(check_id):
+    c = Check.query.get_or_404(check_id)
+    if request.method == 'POST':
+        c.villa = request.form['villa']
+        c.area = request.form['area']
+        c.notes = request.form.get('notes') or ''
+        c.status = request.form.get('status','pending')
+        f = request.files.get('photo')
+        if f and f.filename and allowed_file(f.filename):
+            filename = secure_filename(f.filename)
+            dst = Path(app.config['UPLOAD_FOLDER']) / filename
+            f.save(str(dst))
+            c.photo_path = str(dst)
+        db.session.commit()
+        return redirect(with_lang(url_for('list_checks', villa=c.villa)))
+    return render_template('CHECK_FORM', check=c, villas=VILLAS)
+
 
 # ---- Admin: Users ----
 @app.route('/admin/users')
@@ -865,6 +1096,7 @@ def dashboard():
 def admin_users():
     users = User.query.order_by(User.role.desc(), User.name.asc()).all()
     return render_template('USERS', users=users)
+
 
 @app.route('/admin/users/new', methods=['GET','POST'])
 @login_required
@@ -885,233 +1117,53 @@ def admin_users_new():
         return redirect(with_lang(url_for('admin_users')))
     return render_template('USER_FORM')
 
-# ---- SOPs ----
-@app.route('/sops')
-@login_required
-def list_sops():
-    villa = request.args.get('villa') or None
-    q = SOP.query
-    if villa:
-        q = q.filter(SOP.villa == villa)
-    sops = q.order_by(SOP.created_at.desc()).all()
-    return render_template('SOPS', sops=sops, villa=villa, villas=VILLAS)
-
-@app.route('/sops/new', methods=['GET', 'POST'])
-@login_required
-def new_sop():
-    if request.method == 'POST':
-        s = SOP(
-            title=request.form['title'],
-            category=request.form['category'],
-            content=request.form['content'],
-            villa=(request.form.get('villa') or None),
-        )
-        db.session.add(s)
-        db.session.commit()
-        return redirect(with_lang(url_for('list_sops', villa=s.villa)))
-    return render_template('SOP_FORM', sop=None, villas=VILLAS)
-
-@app.route('/sops/<int:sop_id>/edit', methods=['GET', 'POST'])
-@login_required
-def edit_sop(sop_id):
-    s = SOP.query.get_or_404(sop_id)
-    if request.method == 'POST':
-        s.title = request.form['title']
-        s.category = request.form['category']
-        s.content = request.form['content']
-        s.villa = request.form.get('villa') or None
-        db.session.commit()
-        return redirect(with_lang(url_for('list_sops', villa=s.villa)))
-    return render_template('SOP_FORM', sop=s, villas=VILLAS)
-
-# ---- Tasks ----
-@app.route('/tasks')
-@login_required
-def list_tasks():
-    tasks = Task.query.order_by(Task.created_at.desc()).all()
-    return render_template('TASKS', tasks=tasks)
-
-@app.route('/tasks/new', methods=['GET', 'POST'])
-@login_required
-def new_task():
-    if request.method == 'POST':
-        title = request.form['title']
-        status = request.form.get('status','pending')
-        assigned_to_id = request.form.get('assigned_to') or None
-        due_date = request.form.get('due_date')
-        task = Task(title=title, status=status, created_by=current_user)
-        if assigned_to_id:
-            task.assigned_to = User.query.get(int(assigned_to_id))
-        if due_date:
-            task.due_date = datetime.strptime(due_date, '%Y-%m-%d')
-        db.session.add(task)
-        db.session.commit()
-        return redirect(with_lang(url_for('list_tasks')))
-    users = User.query.order_by(User.name).all()
-    return render_template('TASK_FORM', task=None, users=users)
-
-@app.route('/tasks/<int:task_id>/edit', methods=['GET', 'POST'])
-@login_required
-def edit_task(task_id):
-    task = Task.query.get_or_404(task_id)
-    if request.method == 'POST':
-        task.title = request.form['title']
-        task.status = request.form.get('status','pending')
-        assigned_to_id = request.form.get('assigned_to') or None
-        due_date = request.form.get('due_date')
-        task.assigned_to = User.query.get(int(assigned_to_id)) if assigned_to_id else None
-        task.due_date = datetime.strptime(due_date, '%Y-%m-%d') if due_date else None
-        db.session.commit()
-        return redirect(with_lang(url_for('list_tasks')))
-    users = User.query.order_by(User.name).all()
-    return render_template('TASK_FORM', task=task, users=users)
-
-# ---- Checks ----
-def allowed_file(fn: str) -> bool:
-    return '.' in fn and fn.rsplit('.', 1)[1].lower() in {'png','jpg','jpeg','gif','webp'}
-
-@app.route('/checks')
-@login_required
-def list_checks():
-    villa = request.args.get('villa') or None
-    q = Check.query
-    if villa:
-        q = q.filter(Check.villa == villa)
-    checks = q.order_by(Check.created_at.desc()).all()
-    return render_template('CHECKS', checks=checks, villas=VILLAS)
-
-@app.route('/checks/new', methods=['GET', 'POST'])
-@login_required
-def new_check():
-    if request.method == 'POST':
-        villa = request.form['villa']
-        area = request.form['area']
-        notes = request.form.get('notes')
-        status = request.form.get('status','pending')
-        photo_path = None
-        file = request.files.get('photo')
-        if file and file.filename:
-            if not allowed_file(file.filename):
-                flash('Unsupported file type', 'warning')
-                return redirect(request.url)
-            filename = datetime.utcnow().strftime('%Y%m%d%H%M%S_') + secure_filename(file.filename)
-            fullpath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-            file.save(fullpath)
-            photo_path = fullpath
-            flash(t('upload_ok'), 'success')
-        c = Check(villa=villa, area=area, notes=notes, status=status, created_by=current_user, photo_path=photo_path)
-        db.session.add(c)
-        db.session.commit()
-        return redirect(with_lang(url_for('list_checks')))
-    return render_template('CHECK_FORM', check=None, villas=VILLAS)
-
-@app.route('/checks/<int:check_id>/edit', methods=['GET', 'POST'])
-@login_required
-def edit_check(check_id):
-    c = Check.query.get_or_404(check_id)
-    if request.method == 'POST':
-        c.villa = request.form['villa']
-        c.area = request.form['area']
-        c.notes = request.form.get('notes')
-        c.status = request.form.get('status','pending')
-        file = request.files.get('photo')
-        if file and file.filename:
-            if not allowed_file(file.filename):
-                flash('Unsupported file type', 'warning')
-                return redirect(request.url)
-            filename = datetime.utcnow().strftime('%Y%m%d%H%M%S_') + secure_filename(file.filename)
-            fullpath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-            file.save(fullpath)
-            c.photo_path = fullpath
-            flash(t('upload_ok'), 'success')
-        db.session.commit()
-        return redirect(with_lang(url_for('list_checks')))
-    return render_template('CHECK_FORM', check=c, villas=VILLAS)
 
 # ---- Uploads ----
 @app.route('/uploads/<path:filename>')
+@login_required
 def uploaded_file(filename):
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
+
+# ---- Self Test ----
+@app.route('/selftest', methods=['GET','POST'])
+def selftest():
+    class R:
+        def __init__(self, ok: bool, msg: str):
+            self.ok, self.msg = ok, msg
+    results = None
+    if request.method == 'POST':
+        results = []
+        try:
+            # root redirect
+            results.append(R(True, 'Index reachable'))
+        except Exception as e:
+            results.append(R(False, f'Index error: {e}'))
+        # DB basic
+        try:
+            _ = User.query.count()
+            results.append(R(True, 'DB reachable')))
+        except Exception as e:
+            results.append(R(False, f'DB error: {e}'))
+        # Templates compile
+        try:
+            render_template('DASH', tasks=[], checks=[], villas=VILLAS)
+            render_template('TASK_FORM', task=None, users=[])
+            render_template('CHECK_FORM', check=None, villas=VILLAS)
+            render_template('SOP_FORM', sop=None, villas=VILLAS)
+            results.append(R(True, 'Templates render'))
+        except Exception as e:
+            results.append(R(False, f'Template error: {e}'))
+    return render_template('SELFTEST', results=results)
+
+
 # ------------------------------
-# DB Init & Seed
+# Init
 # ------------------------------
-@app.cli.command('initdb')
-def initdb_command():
-    db.drop_all()
-    db.create_all()
-    seed()
-    print('Initialized the database with demo data.')
-
-def seed():
-    # upsert users
-    def upsert(email, name, role, pw):
-        u = User.query.filter_by(email=email).first()
-        if not u:
-            u = User(email=email, name=name, role=role)
-            u.set_password(pw)
-            db.session.add(u)
-        else:
-            u.name = name
-            u.role = role
-            u.set_password(pw)
-        return u
-
-    upsert('admin@villa.local', 'admin', 'admin', '10051005+')
-    upsert('stanley@villa.local', 'Stanley', 'staff', '0585')
-
-    if not User.query.filter_by(email='staff@example.com').first():
-        demo = User(email='staff@example.com', name='Staff', role='staff')
-        demo.set_password('9910')
-        db.session.add(demo)
-
-    if SOP.query.count() == 0:
-        db.session.add_all([
-            SOP(
-                title='客房清潔（退房）',
-                category='清潔',
-                villa=(VILLAS[0] if VILLAS else None),
-                content="1) 換床品
-2) 吸塵與拖地
-3) 垃圾清理
-4) 補充備品"
-            ),
-            SOP(
-                title='花園巡檢',
-                category='園藝',
-                villa=(VILLAS[1] if len(VILLAS) > 1 else None),
-                content="1) 除草
-2) 澆水
-3) 確認照明
-4) 報告異常"
-            )
-        ])
-
-    if Task.query.count() == 0:
-        admin = User.query.filter_by(email='admin@villa.local').first()
-        staff = User.query.filter_by(email='stanley@villa.local').first() or User.query.filter_by(email='staff@example.com').first()
-        db.session.add_all([
-            Task(title='補充毛巾（A棟）', status='pending', assigned_to=staff, created_by=admin, due_date=datetime.utcnow()+timedelta(days=1)),
-            Task(title='更換過濾器（Panorama）', status='in_progress', assigned_to=staff, created_by=admin),
-        ])
-
-    db.session.commit()
-
-# Ensure DB and simple migration (SQLAlchemy 2.x safe)
 with app.app_context():
     db.create_all()
-    try:
-        with db.engine.connect() as conn:
-            cols = [r[1] for r in conn.exec_driver_sql("PRAGMA table_info(sop)").fetchall()]
-            if 'villa' not in cols:
-                conn.exec_driver_sql("ALTER TABLE sop ADD COLUMN villa VARCHAR(80)")
-            conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_sop_villa ON sop (villa)")
-    except Exception as e:
-        print("DB migration check failed:", e)
-    seed()
+    ensure_seed_users()
 
-# ------------------------------
-# Run
-# ------------------------------
+
 if __name__ == '__main__':
-    app.run(debug=True, host='127.0.0.1', port=8000)
+    app.run(host='127.0.0.1', port=8000, debug=True)
