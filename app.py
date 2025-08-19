@@ -1,24 +1,14 @@
+# -*- coding: utf-8 -*-
 """
-Villa Staff Memo Web App — No-Login Demo (auto staff)
------------------------------------------------------
-Quickstart (macOS):
-1) pip3 install flask flask-login flask_sqlalchemy
-2) python3 app.py
-3) Open http://127.0.0.1:8000
-
-Changes vs. previous:
-- Login page removed. System auto-signs in a default Staff user on each request.
-- You can use all pages (Dashboard / SOP / Tasks / Checks) without credentials.
-
-Demo seed:
-- Admin: admin@example.com / 9910
-- Staff: staff@example.com / 9910  (auto login as this account)
-
-Notes:
-- Single-file app. Templates inline with Bootstrap 5.
-- Images saved to ./uploads. Basic i18n via ?lang=zh|ja|en (cookie persisted).
-- Villa names are configurable via env var `VILLA_NAMES` (comma or newline separated). On Render, use **Secret Files** `.env`.
-- Password hashing uses pbkdf2:sha256 to avoid scrypt dependency.
+Villa Staff Memo Web App — Login + Admin Users (fixed ASCII templates)
+---------------------------------------------------------------------
+- Local run:  python3 app.py  → http://127.0.0.1:8000
+- Seeded users:
+    admin@villa.local / 10051005+   (role=admin, name=admin)
+    stanley@villa.local / 0585      (role=staff,  name=Stanley)
+- Optional portal access code: set ACCESS_CODE in env/Secret Files. Use /access to enter.
+- Villas: set VILLA_NAMES (comma or newline separated). Pads to exactly 24 names.
+- Render Procfile:  web: gunicorn app:app
 """
 
 from __future__ import annotations
@@ -26,7 +16,7 @@ import os
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict
-import re
+from functools import wraps
 
 from flask import (
     Flask, request, redirect, url_for, flash, send_from_directory,
@@ -40,13 +30,12 @@ from flask_login import (
 )
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
+from jinja2 import DictLoader
 
-# --- Optional: load env vars from .env or secret files (Render) ---
+# Optional: dotenv (.env + Render Secret Files)
 try:
     from dotenv import load_dotenv, find_dotenv
-    # Load .env from project root if present
     load_dotenv(find_dotenv(), override=True)
-    # Load secret file if Render Secret Files mounted at this path
     if os.path.exists('/etc/secrets/.env'):
         load_dotenv('/etc/secrets/.env', override=True)
 except Exception:
@@ -57,14 +46,10 @@ except Exception:
 # ------------------------------
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-change-me')
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///memo_demo.db'
+app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///memo_demo.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['UPLOAD_FOLDER'] = str(Path('uploads').absolute())
+app.config['UPLOAD_FOLDER'] = os.environ.get('UPLOAD_FOLDER', str(Path('uploads').absolute()))
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16 MB
-
-# Allow env overrides for cloud deploy (Render, etc.)
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', app.config['SQLALCHEMY_DATABASE_URI'])
-app.config['UPLOAD_FOLDER'] = os.environ.get('UPLOAD_FOLDER', app.config['UPLOAD_FOLDER'])
 
 Path(app.config['UPLOAD_FOLDER']).mkdir(parents=True, exist_ok=True)
 
@@ -72,11 +57,8 @@ db = SQLAlchemy(app)
 login_manager = LoginManager(app)
 login_manager.login_view = 'login'
 
-# Jinja DictLoader for inline templates
-from jinja2 import DictLoader
-
 # ------------------------------
-# Simple i18n
+# i18n
 # ------------------------------
 I18N: Dict[str, Dict[str, str]] = {
     'zh': {
@@ -222,7 +204,6 @@ I18N: Dict[str, Dict[str, str]] = {
     }
 }
 
-
 def _get_lang() -> str:
     try:
         raw = (request.args.get('lang') or request.cookies.get('lang') or 'zh').lower()
@@ -234,55 +215,29 @@ def t(key: str) -> str:
     lang = _get_lang()
     return I18N.get(lang, I18N['zh']).get(key, key)
 
-
 def with_lang(url: str) -> str:
     lang = _get_lang()
     sep = '&' if ('?' in url) else '?'
     return f"{url}{sep}lang={lang}" if lang else url
 
-
-# Villas list (24) — configurable via env var VILLA_NAMES (comma or newline separated)
-# Example in .env / Secret File:
-# VILLA_NAMES=Sunset,Aqua,Coral,Emerald,...(24 names)
-
+# ------------------------------
+# Villas list (24)
+# ------------------------------
 def _load_villas() -> list:
-    """Return 24 villa names.
-    Priority: env var VILLA_NAMES (comma/newline separated) →
-    fallback to the custom default list below (your provided names),
-    then pad/truncate to exactly 24.
-    """
     raw = os.environ.get('VILLA_NAMES', '').strip()
     if raw:
-        # Split by commas and/or newlines safely using escaped literals
-        tmp = raw.replace('\r', '\n').replace(',', '\n')
-        names = [n.strip() for n in tmp.split('\n') if n.strip()]
+        tmp = raw.replace('', '
+').replace(',', '
+')
+        names = [n.strip() for n in tmp.split('
+') if n.strip()]
     else:
-        # ← Default list from your request (22 names)
         names = [
-            "Grand Villa",
-            "Villa A",
-            "Villa B",
-            "Villa C",
-            "Panorama Villa",
-            "Sankando Office",
-            "Glamping Office",
-            "MOKA",
-            "KOKO",
-            "MARU",
-            "RUNA",
-            "MEI",
-            "RIN",
-            "LEO",
-            "MOMO",
-            "New DOME",
-            "CUBE",
-            "Gekkouen",
-            "Villa D",
-            "Villa E",
-            "Villa F",
-            "Villa G",
+            "Grand Villa", "Villa A", "Villa B", "Villa C", "Panorama Villa",
+            "Sankando Office", "Glamping Office", "MOKA", "KOKO", "MARU",
+            "RUNA", "MEI", "RIN", "LEO", "MOMO", "New DOME", "CUBE",
+            "Gekkouen", "Villa D", "Villa E", "Villa F", "Villa G",
         ]
-    # normalize to exactly 24 entries: trim extra or pad with placeholders
     names = names[:24]
     if len(names) < 24:
         start = len(names) + 1
@@ -290,11 +245,6 @@ def _load_villas() -> list:
     return names
 
 VILLAS = _load_villas()
-
-
-
-
-
 
 # ------------------------------
 # Models
@@ -307,33 +257,29 @@ class User(db.Model, UserMixin):
     password_hash = db.Column(db.String(255), nullable=False)
 
     def set_password(self, pw: str):
-        # Explicitly use pbkdf2:sha256 to avoid scrypt dependency
         self.password_hash = generate_password_hash(pw, method='pbkdf2:sha256')
 
     def check_password(self, pw: str) -> bool:
         return check_password_hash(self.password_hash, pw)
-
 
 class SOP(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     title = db.Column(db.String(200), nullable=False)
     category = db.Column(db.String(80), nullable=False)
     content = db.Column(db.Text, nullable=False)
-    villa = db.Column(db.String(80), nullable=True, index=True)  # NEW: per-villa routing
+    villa = db.Column(db.String(80), nullable=True, index=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
 
 class Task(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     title = db.Column(db.String(200), nullable=False)
-    status = db.Column(db.String(20), default='pending')  # pending/in_progress/done
+    status = db.Column(db.String(20), default='pending')
     assigned_to_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
     assigned_to = db.relationship('User', foreign_keys=[assigned_to_id])
     due_date = db.Column(db.DateTime, nullable=True)
     created_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
     created_by = db.relationship('User', foreign_keys=[created_by_id])
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
 
 class Check(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -346,61 +292,89 @@ class Check(db.Model):
     created_by = db.relationship('User')
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-
 @login_manager.user_loader
 def load_user(user_id):
     return User.query.get(int(user_id))
 
+# Admin-only decorator
+from functools import wraps
+
+def admin_required(fn):
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        if not current_user.is_authenticated or current_user.role != 'admin':
+            abort(403)
+        return fn(*args, **kwargs)
+    return wrapper
 
 # ------------------------------
-# Templates (inline)
+# Templates
 # ------------------------------
 BASE = """
 <!doctype html>
-<html lang=\"en\">
+<html lang="en">
 <head>
-  <meta charset=\"utf-8\">
-  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ t('app_title') }}</title>
-  <link rel=\"stylesheet\" href=\"https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css\">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css">
   <style>
     body { padding-top: 4.5rem; }
     .navbar-brand { font-weight: 700; }
     .card { border-radius: 1rem; }
-    .btn { border-radius: .75rem; }
-    .form-control, .form-select { border-radius: .75rem; }
+    .btn, .form-control, .form-select { border-radius: .75rem; }
   </style>
 </head>
 <body>
-<nav class=\"navbar navbar-expand-lg navbar-dark bg-dark fixed-top\">
-  <div class=\"container-fluid\">
-    <a class=\"navbar-brand\" href=\"{{ with_lang(url_for('dashboard')) }}\">{{ t('app_title') }}</a>
-    <button class=\"navbar-toggler\" type=\"button\" data-bs-toggle=\"collapse\" data-bs-target=\"#nav\" aria-controls=\"nav\" aria-expanded=\"false\" aria-label=\"Toggle navigation\">
-      <span class=\"navbar-toggler-icon\"></span>
+<nav class="navbar navbar-expand-lg navbar-dark bg-dark fixed-top">
+  <div class="container-fluid">
+    <a class="navbar-brand" href="{{ with_lang(url_for('dashboard')) }}">{{ t('app_title') }}</a>
+    <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#nav">
+      <span class="navbar-toggler-icon"></span>
     </button>
-    <div class=\"collapse navbar-collapse\" id=\"nav\">
-      <ul class=\"navbar-nav me-auto mb-2 mb-lg-0\">
-        <li class=\"nav-item\"><a class=\"nav-link\" href=\"{{ with_lang(url_for('dashboard')) }}\">{{ t('dashboard') }}</a></li>
-        <li class=\"nav-item\"><a class=\"nav-link\" href=\"{{ with_lang(url_for('list_sops')) }}\">{{ t('sops') }}</a></li>
-        <li class=\"nav-item\"><a class=\"nav-link\" href=\"{{ with_lang(url_for('list_tasks')) }}\">{{ t('tasks') }}</a></li>
-        <li class=\"nav-item\"><a class=\"nav-link\" href=\"{{ with_lang(url_for('list_checks')) }}\">{{ t('checks') }}</a></li>
+    <div class="collapse navbar-collapse" id="nav">
+      <ul class="navbar-nav me-auto mb-2 mb-lg-0">
+        <li class="nav-item"><a class="nav-link" href="{{ with_lang(url_for('dashboard')) }}">{{ t('dashboard') }}</a></li>
+        <li class="nav-item"><a class="nav-link" href="{{ with_lang(url_for('list_sops')) }}">{{ t('sops') }}</a></li>
+        <li class="nav-item"><a class="nav-link" href="{{ with_lang(url_for('list_tasks')) }}">{{ t('tasks') }}</a></li>
+        <li class="nav-item"><a class="nav-link" href="{{ with_lang(url_for('list_checks')) }}">{{ t('checks') }}</a></li>
+        {% if current_user.is_authenticated and current_user.role=='admin' %}
+        <li class="nav-item"><a class="nav-link" href="{{ with_lang(url_for('admin_users')) }}">Users</a></li>
+        {% endif %}
       </ul>
-      <form class=\"d-flex\" method=\"get\" action=\"{{ request.path }}\">
-        <select class=\"form-select\" name=\"lang\" onchange=\"this.form.submit()\">
+      <form class="d-flex" method="get" action="{{ request.path }}">
+        <select class="form-select" name="lang" onchange="this.form.submit()">
           {% set cur = request.args.get('lang') or request.cookies.get('lang') or 'zh' %}
-          <option value=\"zh\" {% if cur=='zh' %}selected{% endif %}>中文</option>
-          <option value=\"ja\" {% if cur=='ja' %}selected{% endif %}>日本語</option>
-          <option value=\"en\" {% if cur=='en' %}selected{% endif %}>English</option>
+          <option value="zh" {% if cur=='zh' %}selected{% endif %}>中文</option>
+          <option value="ja" {% if cur=='ja' %}selected{% endif %}>日本語</option>
+          <option value="en" {% if cur=='en' %}selected{% endif %}>English</option>
         </select>
       </form>
-      <span class=\"navbar-text text-light ms-3\">{{ t('hello') }}，{{ (current_user.name if current_user.is_authenticated else 'Staff') }} ({{ t('role_staff') }})</span>
+      <span class="navbar-text text-light ms-3">
+        {{ t('hello') }}，{{ (current_user.name if current_user.is_authenticated else 'Guest') }}
+        {% if current_user.is_authenticated %}({{ current_user.role }}){% endif %}
+      </span>
+      {% if current_user.is_authenticated %}
+      <a class="btn btn-outline-light btn-sm ms-2" href="{{ with_lang(url_for('logout')) }}">{{ t('logout') }}</a>
+      {% endif %}
     </div>
   </div>
 </nav>
-<div class=\"container py-3\">
+
+<div class="container py-3">
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      {% for cat, msg in messages %}
+        <div class="alert alert-{{ 'warning' if cat=='warning' else 'info' }} alert-dismissible fade show" role="alert">
+          {{ msg }}
+          <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        </div>
+      {% endfor %}
+    {% endif %}
+  {% endwith %}
+
   {% block body %}{% endblock %}
 </div>
-<script src=\"https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js\"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
 """
@@ -408,8 +382,26 @@ BASE = """
 LOGIN = """
 {% extends 'BASE' %}
 {% block body %}
-<div class=\"alert alert-info mt-3\">Login is disabled. Redirecting to dashboard...</div>
-<meta http-equiv=\"refresh\" content=\"0; url={{ with_lang(url_for('dashboard')) }}\">
+<div class="row justify-content-center">
+  <div class="col-md-5">
+    <div class="card shadow-sm">
+      <div class="card-body">
+        <h4 class="mb-3">{{ t('login') }}</h4>
+        <form method="post">
+          <div class="mb-3">
+            <label class="form-label">{{ t('email') }}</label>
+            <input class="form-control" name="identifier" placeholder="Email or name" required>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">{{ t('password') }}</label>
+            <input type="password" class="form-control" name="password" required>
+          </div>
+          <button class="btn btn-primary w-100">{{ t('login') }}</button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
 {% endblock %}
 """
 
@@ -438,18 +430,15 @@ DASH = """
       <div class="card shadow-sm">
         <div class="card-body">
           <h5 class="card-title">{{ t('tasks') }}</h5>
-          <a class="btn btn-sm btn-primary mb-2" href="{{ with_lang(url_for('new_task')) }}">＋ {{ t('new_task') }}</a>
+          <a class="btn btn-sm btn-primary mb-2" href="{{ with_lang(url_for('new_task')) }}">+ {{ t('new_task') }}</a>
           <ul class="list-group">
             {% for task in tasks %}
             <li class="list-group-item d-flex justify-content-between align-items-center">
               <div>
                 <strong>{{ task.title }}</strong>
-                <div class="small text-muted">{{ t('status') }}: {{ t(task.status) }}{% if task.assigned_to %}｜{{ t('assigned_to') }}: {{ task.assigned_to.name }}{% endif %}
-                {% if task.due_date %}｜{{ t('due_date') }}: {{ task.due_date.date() }}{% endif %}</div>
+                <div class="small text-muted">{{ t('status') }}: {{ t(task.status) }}{% if task.assigned_to %}｜{{ t('assigned_to') }}: {{ task.assigned_to.name }}{% endif %}{% if task.due_date %}｜{{ t('due_date') }}: {{ task.due_date.date() }}{% endif %}</div>
               </div>
-              <div>
-                <a class="btn btn-sm btn-outline-secondary" href="{{ with_lang(url_for('edit_task', task_id=task.id)) }}">{{ t('edit') }}</a>
-              </div>
+              <div><a class="btn btn-sm btn-outline-secondary" href="{{ with_lang(url_for('edit_task', task_id=task.id)) }}">{{ t('edit') }}</a></div>
             </li>
             {% else %}
             <li class="list-group-item">—</li>
@@ -462,7 +451,7 @@ DASH = """
       <div class="card shadow-sm">
         <div class="card-body">
           <h5 class="card-title">{{ t('checks') }}</h5>
-          <a class="btn btn-sm btn-primary mb-2" href="{{ with_lang(url_for('new_check')) }}">＋ {{ t('new_check') }}</a>
+          <a class="btn btn-sm btn-primary mb-2" href="{{ with_lang(url_for('new_check')) }}">+ {{ t('new_check') }}</a>
           <ul class="list-group">
             {% for c in checks %}
             <li class="list-group-item d-flex justify-content-between align-items-center">
@@ -504,7 +493,7 @@ SOPS = """
         {% endfor %}
       </select>
     </form>
-    <a class="btn btn-primary" href="{{ with_lang(url_for('new_sop', villa=villa)) }}">＋ {{ t('new_sop') }}</a>
+    <a class="btn btn-primary" href="{{ with_lang(url_for('new_sop', villa=villa)) }}">+ {{ t('new_sop') }}</a>
   </div>
 </div>
 <div class="list-group">
@@ -531,21 +520,42 @@ SOP_FORM = """
   <div class="mb-3">
     <label class="form-label">{{ t('title') }}</label>
     <input name="title" class="form-control" value="{{ sop.title if sop else '' }}" required>
+  </div>
+  <div class="mb-3">
+    <label class="form-label">{{ t('category') }}</label>
+    <input name="category" class="form-control" value="{{ sop.category if sop else '' }}" required>
+  </div>
+  <div class="mb-3">
+    <label class="form-label">{{ t('villa') }}</label>
+    <select name="villa" class="form-select">
+      <option value="">—</option>
+      {% for v in villas %}
+      <option value="{{ v }}" {% if (sop and sop.villa==v) or (not sop and request.args.get('villa')==v) %}selected{% endif %}>{{ v }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="mb-3">
+    <label class="form-label">{{ t('content') }}</label>
+    <textarea name="content" class="form-control" rows="8" required>{{ sop.content if sop else '' }}</textarea>
+  </div>
+  <button class="btn btn-primary">{{ t('save') }}</button>
+</form>
+{% endblock %}
+"""
 
 TASKS = """
 {% extends 'BASE' %}
 {% block body %}
 <div class="d-flex justify-content-between align-items-center mb-2">
   <h4>{{ t('tasks') }}</h4>
-  <a class="btn btn-primary" href="{{ with_lang(url_for('new_task')) }}">＋ {{ t('new_task') }}</a>
+  <a class="btn btn-primary" href="{{ with_lang(url_for('new_task')) }}">+ {{ t('new_task') }}</a>
 </div>
 <ul class="list-group">
 {% for task in tasks %}
   <li class="list-group-item d-flex justify-content-between align-items-center">
     <div>
       <strong>{{ task.title }}</strong>
-      <div class="small text-muted">{{ t('status') }}: {{ t(task.status) }}{% if task.assigned_to %}｜{{ t('assigned_to') }}: {{ task.assigned_to.name }}{% endif %}
-      {% if task.due_date %}｜{{ t('due_date') }}: {{ task.due_date.date() }}{% endif %}</div>
+      <div class="small text-muted">{{ t('status') }}: {{ t(task.status) }}{% if task.assigned_to %}｜{{ t('assigned_to') }}: {{ task.assigned_to.name }}{% endif %}{% if task.due_date %}｜{{ t('due_date') }}: {{ task.due_date.date() }}{% endif %}</div>
     </div>
     <a class="btn btn-sm btn-outline-secondary" href="{{ with_lang(url_for('edit_task', task_id=task.id)) }}">{{ t('edit') }}</a>
   </li>
@@ -606,7 +616,7 @@ CHECKS = """
         {% endfor %}
       </select>
     </form>
-    <a class="btn btn-primary" href="{{ with_lang(url_for('new_check', villa=request.args.get('villa'))) }}">＋ {{ t('new_check') }}</a>
+    <a class="btn btn-primary" href="{{ with_lang(url_for('new_check', villa=request.args.get('villa'))) }}">+ {{ t('new_check') }}</a>
   </div>
 </div>
 <ul class="list-group">
@@ -668,37 +678,7 @@ CHECK_FORM = """
 </form>
 {% endblock %}
 """
-  </div>
-  <div class="mb-3">
-    <label class="form-label">{{ t('area') }}</label>
-    <input name="area" class="form-control" value="{{ check.area if check else '' }}" required>
-  </div>
-  <div class="mb-3">
-    <label class="form-label">{{ t('notes') }}</label>
-    <textarea name="notes" class="form-control" rows="4">{{ check.notes if check else '' }}</textarea>
-  </div>
-  <div class="mb-3">
-    <label class="form-label">{{ t('photo') }}</label>
-    <input type="file" name="photo" class="form-control" accept="image/*">
-    {% if check and check.photo_path %}
-      <div class="form-text"><a href="{{ url_for('uploaded_file', filename=check.photo_path.split('/')[-1]) }}" target="_blank">{{ t('photo') }}</a></div>
-    {% endif %}
-  </div>
-  <div class="mb-3">
-    <label class="form-label">{{ t('status') }}</label>
-    <select name="status" class="form-select">
-      {% for s in ['pending','in_progress','done'] %}
-      <option value="{{ s }}" {% if check and check.status==s %}selected{% endif %}>{{ t(s) }}</option>
-      {% endfor %}
-    </select>
-  </div>
-  <button class="btn btn-primary">{{ t('save') }}</button>
-</form>
-{% endblock %}
-"""
 
-# Register templates into Jinja env
-app.jinja_env.globals.update(t=t, with_lang=with_lang)
 ACCESS = """
 {% extends 'BASE' %}
 {% block body %}
@@ -722,6 +702,59 @@ ACCESS = """
 {% endblock %}
 """
 
+USERS = """
+{% extends 'BASE' %}
+{% block body %}
+<div class="d-flex justify-content-between align-items-center mb-2">
+  <h4>Users</h4>
+  <a class="btn btn-primary" href="{{ with_lang(url_for('admin_users_new')) }}">+ New User</a>
+</div>
+<table class="table table-striped">
+  <thead><tr><th>ID</th><th>Name</th><th>Email</th><th>Role</th></tr></thead>
+  <tbody>
+  {% for u in users %}
+    <tr>
+      <td>{{ u.id }}</td>
+      <td>{{ u.name }}</td>
+      <td>{{ u.email }}</td>
+      <td>{{ u.role }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
+"""
+
+USER_FORM = """
+{% extends 'BASE' %}
+{% block body %}
+<h4>New User</h4>
+<form method="post">
+  <div class="mb-3">
+    <label class="form-label">Name</label>
+    <input name="name" class="form-control" required>
+  </div>
+  <div class="mb-3">
+    <label class="form-label">Email</label>
+    <input name="email" type="email" class="form-control" required>
+  </div>
+  <div class="mb-3">
+    <label class="form-label">Role</label>
+    <select name="role" class="form-select">
+      <option value="staff">staff</option>
+      <option value="admin">admin</option>
+    </select>
+  </div>
+  <div class="mb-3">
+    <label class="form-label">Password</label>
+    <input name="password" type="password" class="form-control" required>
+  </div>
+  <button class="btn btn-primary">Save</button>
+</form>
+{% endblock %}
+"""
+
+app.jinja_env.globals.update(t=t, with_lang=with_lang)
 app.jinja_loader = DictLoader({
     'BASE': BASE,
     'LOGIN': LOGIN,
@@ -733,73 +766,73 @@ app.jinja_loader = DictLoader({
     'CHECKS': CHECKS,
     'CHECK_FORM': CHECK_FORM,
     'ACCESS': ACCESS,
+    'USERS': USERS,
+    'USER_FORM': USER_FORM,
 })
 
 # ------------------------------
-# Routes
+# Routes & Auth
 # ------------------------------
 @app.route('/health')
 def health():
     return 'ok', 200
 
 @app.before_request
-def persist_lang_cookie_and_auto_login():
-    # 1) Access gate (optional via ACCESS_CODE)
+def persist_lang_and_gate():
+    # lang cookie
     g.lang_to_set = None
     lang = request.args.get('lang')
     if lang:
         g.lang_to_set = lang
 
+    # optional ACCESS_CODE gate
     access_code = os.environ.get('ACCESS_CODE')
     if access_code:
-        # allowlist endpoints
-        allowed_eps = {'health', 'access', 'static'}
+        allowed_eps = {'health', 'access', 'static', 'login'}
         ep = (request.endpoint or '').split('.')[-1]
         has_cookie = request.cookies.get('ac') == access_code
         from_query = request.args.get('access')
         if from_query and from_query == access_code:
-            # mark to set cookie after response
             g._set_access_cookie = True
         elif not has_cookie and ep not in allowed_eps:
-            # redirect to /access with next param
             nxt = request.full_path if request.query_string else request.path
             return redirect(url_for('access', next=nxt))
 
-    # 2) Auto-login as Staff (no login page)
-    if not current_user.is_authenticated:
-        staff = User.query.filter_by(email='staff@example.com').first()
-        if staff:
-            login_user(staff)
-
 @app.after_request
 def apply_lang_cookie(response):
-    # Apply language cookie if requested in this cycle
     try:
         if getattr(g, 'lang_to_set', None):
             response.set_cookie('lang', g.lang_to_set, max_age=30*24*3600)
         if getattr(g, '_set_access_cookie', False):
-            # simple cookie to remember ACCESS_CODE validation
             response.set_cookie('ac', os.environ.get('ACCESS_CODE',''), max_age=7*24*3600, httponly=True)
     except Exception:
         pass
     return response
 
-
 @app.route('/')
 def index():
     return redirect(with_lang(url_for('dashboard')))
 
-
 @app.route('/login', methods=['GET', 'POST'])
 def login():
-    # Login disabled: just go to dashboard
-    return redirect(with_lang(url_for('dashboard')))
+    if request.method == 'POST':
+        ident = (request.form.get('identifier') or '').strip()
+        pw = request.form.get('password') or ''
+        if '@' in ident:
+            user = User.query.filter_by(email=ident).first()
+        else:
+            user = User.query.filter_by(name=ident).first()
+        if user and user.check_password(pw):
+            login_user(user)
+            nxt = request.args.get('next') or url_for('dashboard')
+            return redirect(with_lang(nxt))
+        flash('Invalid credentials', 'warning')
+    return render_template('LOGIN')
 
 @app.route('/access', methods=['GET','POST'])
 def access():
     access_code = os.environ.get('ACCESS_CODE')
     if not access_code:
-        # If no gate configured, just go home
         return redirect(with_lang(url_for('dashboard')))
     if request.method == 'POST':
         if request.form.get('access') == access_code:
@@ -810,16 +843,13 @@ def access():
             flash(t('access_denied'), 'warning')
     return render_template('ACCESS')
 
-
 @app.route('/logout')
 def logout():
-    # Logout disabled in no-login mode; still clear session then redirect
     try:
         logout_user()
     except Exception:
         pass
-    return redirect(with_lang(url_for('dashboard')))
-
+    return redirect(with_lang(url_for('login')))
 
 @app.route('/dashboard')
 @login_required
@@ -828,6 +858,32 @@ def dashboard():
     checks = Check.query.order_by(Check.created_at.desc()).limit(10).all()
     return render_template('DASH', tasks=tasks, checks=checks, villas=VILLAS)
 
+# ---- Admin: Users ----
+@app.route('/admin/users')
+@login_required
+@admin_required
+def admin_users():
+    users = User.query.order_by(User.role.desc(), User.name.asc()).all()
+    return render_template('USERS', users=users)
+
+@app.route('/admin/users/new', methods=['GET','POST'])
+@login_required
+@admin_required
+def admin_users_new():
+    if request.method == 'POST':
+        name = request.form['name']
+        email = request.form['email']
+        role = request.form.get('role','staff')
+        password = request.form['password']
+        if User.query.filter_by(email=email).first():
+            flash('Email already exists', 'warning')
+            return redirect(request.url)
+        u = User(email=email, name=name, role=role)
+        u.set_password(password)
+        db.session.add(u)
+        db.session.commit()
+        return redirect(with_lang(url_for('admin_users')))
+    return render_template('USER_FORM')
 
 # ---- SOPs ----
 @app.route('/sops')
@@ -839,7 +895,6 @@ def list_sops():
         q = q.filter(SOP.villa == villa)
     sops = q.order_by(SOP.created_at.desc()).all()
     return render_template('SOPS', sops=sops, villa=villa, villas=VILLAS)
-
 
 @app.route('/sops/new', methods=['GET', 'POST'])
 @login_required
@@ -856,7 +911,6 @@ def new_sop():
         return redirect(with_lang(url_for('list_sops', villa=s.villa)))
     return render_template('SOP_FORM', sop=None, villas=VILLAS)
 
-
 @app.route('/sops/<int:sop_id>/edit', methods=['GET', 'POST'])
 @login_required
 def edit_sop(sop_id):
@@ -870,14 +924,12 @@ def edit_sop(sop_id):
         return redirect(with_lang(url_for('list_sops', villa=s.villa)))
     return render_template('SOP_FORM', sop=s, villas=VILLAS)
 
-
 # ---- Tasks ----
 @app.route('/tasks')
 @login_required
 def list_tasks():
     tasks = Task.query.order_by(Task.created_at.desc()).all()
     return render_template('TASKS', tasks=tasks)
-
 
 @app.route('/tasks/new', methods=['GET', 'POST'])
 @login_required
@@ -898,7 +950,6 @@ def new_task():
     users = User.query.order_by(User.name).all()
     return render_template('TASK_FORM', task=None, users=users)
 
-
 @app.route('/tasks/<int:task_id>/edit', methods=['GET', 'POST'])
 @login_required
 def edit_task(task_id):
@@ -915,8 +966,10 @@ def edit_task(task_id):
     users = User.query.order_by(User.name).all()
     return render_template('TASK_FORM', task=task, users=users)
 
-
 # ---- Checks ----
+def allowed_file(fn: str) -> bool:
+    return '.' in fn and fn.rsplit('.', 1)[1].lower() in {'png','jpg','jpeg','gif','webp'}
+
 @app.route('/checks')
 @login_required
 def list_checks():
@@ -926,11 +979,6 @@ def list_checks():
         q = q.filter(Check.villa == villa)
     checks = q.order_by(Check.created_at.desc()).all()
     return render_template('CHECKS', checks=checks, villas=VILLAS)
-
-
-def allowed_file(fn: str) -> bool:
-    return '.' in fn and fn.rsplit('.', 1)[1].lower() in {'png','jpg','jpeg','gif','webp'}
-
 
 @app.route('/checks/new', methods=['GET', 'POST'])
 @login_required
@@ -957,7 +1005,6 @@ def new_check():
         return redirect(with_lang(url_for('list_checks')))
     return render_template('CHECK_FORM', check=None, villas=VILLAS)
 
-
 @app.route('/checks/<int:check_id>/edit', methods=['GET', 'POST'])
 @login_required
 def edit_check(check_id):
@@ -981,33 +1028,42 @@ def edit_check(check_id):
         return redirect(with_lang(url_for('list_checks')))
     return render_template('CHECK_FORM', check=c, villas=VILLAS)
 
-
 # ---- Uploads ----
 @app.route('/uploads/<path:filename>')
 def uploaded_file(filename):
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
-
 
 # ------------------------------
 # DB Init & Seed
 # ------------------------------
 @app.cli.command('initdb')
 def initdb_command():
-    """flask initdb — reset and seed demo data"""
     db.drop_all()
     db.create_all()
     seed()
     print('Initialized the database with demo data.')
 
-
 def seed():
-    if User.query.count() == 0:
-        admin = User(email='admin@example.com', name='Admin', role='admin')
-        admin.set_password('9910')
-        staff = User(email='staff@example.com', name='Staff', role='staff')
-        staff.set_password('9910')
-        db.session.add_all([admin, staff])
-        db.session.commit()
+    # upsert users
+    def upsert(email, name, role, pw):
+        u = User.query.filter_by(email=email).first()
+        if not u:
+            u = User(email=email, name=name, role=role)
+            u.set_password(pw)
+            db.session.add(u)
+        else:
+            u.name = name
+            u.role = role
+            u.set_password(pw)
+        return u
+
+    upsert('admin@villa.local', 'admin', 'admin', '10051005+')
+    upsert('stanley@villa.local', 'Stanley', 'staff', '0585')
+
+    if not User.query.filter_by(email='staff@example.com').first():
+        demo = User(email='staff@example.com', name='Staff', role='staff')
+        demo.set_password('9910')
+        db.session.add(demo)
 
     if SOP.query.count() == 0:
         db.session.add_all([
@@ -1015,46 +1071,44 @@ def seed():
                 title='客房清潔（退房）',
                 category='清潔',
                 villa=(VILLAS[0] if VILLAS else None),
-                content="""1) 換床品
+                content="1) 換床品
 2) 吸塵與拖地
 3) 垃圾清理
-4) 補充備品"""
+4) 補充備品"
             ),
             SOP(
                 title='花園巡檢',
                 category='園藝',
                 villa=(VILLAS[1] if len(VILLAS) > 1 else None),
-                content="""1) 除草
+                content="1) 除草
 2) 澆水
 3) 確認照明
-4) 報告異常"""
+4) 報告異常"
             )
         ])
-        db.session.commit()
 
     if Task.query.count() == 0:
-        admin = User.query.filter_by(email='admin@example.com').first()
-        staff = User.query.filter_by(email='staff@example.com').first()
+        admin = User.query.filter_by(email='admin@villa.local').first()
+        staff = User.query.filter_by(email='stanley@villa.local').first() or User.query.filter_by(email='staff@example.com').first()
         db.session.add_all([
             Task(title='補充毛巾（A棟）', status='pending', assigned_to=staff, created_by=admin, due_date=datetime.utcnow()+timedelta(days=1)),
             Task(title='更換過濾器（Panorama）', status='in_progress', assigned_to=staff, created_by=admin),
         ])
-        db.session.commit()
 
+    db.session.commit()
 
-# Ensure DB exists and seeded on first run
+# Ensure DB and simple migration (SQLAlchemy 2.x safe)
 with app.app_context():
     db.create_all()
-    # Lightweight migration: ensure sop.villa column exists and index created
     try:
-        cols = [r[1] for r in db.engine.execute("PRAGMA table_info(sop)").fetchall()]
-        if 'villa' not in cols:
-            db.engine.execute("ALTER TABLE sop ADD COLUMN villa VARCHAR(80)")
-        db.engine.execute("CREATE INDEX IF NOT EXISTS ix_sop_villa ON sop (villa)")
+        with db.engine.connect() as conn:
+            cols = [r[1] for r in conn.exec_driver_sql("PRAGMA table_info(sop)").fetchall()]
+            if 'villa' not in cols:
+                conn.exec_driver_sql("ALTER TABLE sop ADD COLUMN villa VARCHAR(80)")
+            conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_sop_villa ON sop (villa)")
     except Exception as e:
-        print('DB migration check failed:', e)
+        print("DB migration check failed:", e)
     seed()
-
 
 # ------------------------------
 # Run
