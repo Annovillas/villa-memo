@@ -357,12 +357,12 @@ def load_user(user_id):
 # ------------------------------
 BASE = """
 <!doctype html>
-<html lang="en">
+<html lang=\"en\">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta charset=\"utf-8\">
+  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
   <title>{{ t('app_title') }}</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css">
+  <link rel=\"stylesheet\" href=\"https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css\">
   <style>
     body { padding-top: 4.5rem; }
     .navbar-brand { font-weight: 700; }
@@ -372,31 +372,44 @@ BASE = """
   </style>
 </head>
 <body>
-<nav class="navbar navbar-expand-lg navbar-dark bg-dark fixed-top">
-  <div class="container-fluid">
-    <a class="navbar-brand" href="{{ with_lang(url_for('dashboard')) }}">{{ t('app_title') }}</a>
-    <div class="collapse navbar-collapse">
-      <ul class="navbar-nav me-auto mb-2 mb-lg-0">
-        <li class="nav-item"><a class="nav-link" href="{{ with_lang(url_for('dashboard')) }}">{{ t('dashboard') }}</a></li>
-        <li class="nav-item"><a class="nav-link" href="{{ with_lang(url_for('list_sops')) }}">{{ t('sops') }}</a></li>
-        <li class="nav-item"><a class="nav-link" href="{{ with_lang(url_for('list_tasks')) }}">{{ t('tasks') }}</a></li>
-        <li class="nav-item"><a class="nav-link" href="{{ with_lang(url_for('list_checks')) }}">{{ t('checks') }}</a></li>
+<nav class=\"navbar navbar-expand-lg navbar-dark bg-dark fixed-top\">
+  <div class=\"container-fluid\">
+    <a class=\"navbar-brand\" href=\"{{ with_lang(url_for('dashboard')) }}\">{{ t('app_title') }}</a>
+    <button class=\"navbar-toggler\" type=\"button\" data-bs-toggle=\"collapse\" data-bs-target=\"#nav\" aria-controls=\"nav\" aria-expanded=\"false\" aria-label=\"Toggle navigation\">
+      <span class=\"navbar-toggler-icon\"></span>
+    </button>
+    <div class=\"collapse navbar-collapse\" id=\"nav\">
+      <ul class=\"navbar-nav me-auto mb-2 mb-lg-0\">
+        <li class=\"nav-item\"><a class=\"nav-link\" href=\"{{ with_lang(url_for('dashboard')) }}\">{{ t('dashboard') }}</a></li>
+        <li class=\"nav-item\"><a class=\"nav-link\" href=\"{{ with_lang(url_for('list_sops')) }}\">{{ t('sops') }}</a></li>
+        <li class=\"nav-item\"><a class=\"nav-link\" href=\"{{ with_lang(url_for('list_tasks')) }}\">{{ t('tasks') }}</a></li>
+        <li class=\"nav-item\"><a class=\"nav-link\" href=\"{{ with_lang(url_for('list_checks')) }}\">{{ t('checks') }}</a></li>
       </ul>
-      <form class="d-flex" method="get" action="{{ request.path }}">
-        <select class="form-select" name="lang" onchange="this.form.submit()">
+      <form class=\"d-flex\" method=\"get\" action=\"{{ request.path }}\">
+        <select class=\"form-select\" name=\"lang\" onchange=\"this.form.submit()\">
           {% set cur = request.args.get('lang') or request.cookies.get('lang') or 'zh' %}
-          <option value="zh" {% if cur=='zh' %}selected{% endif %}>中文</option>
-          <option value="ja" {% if cur=='ja' %}selected{% endif %}>日本語</option>
-          <option value="en" {% if cur=='en' %}selected{% endif %}>English</option>
+          <option value=\"zh\" {% if cur=='zh' %}selected{% endif %}>中文</option>
+          <option value=\"ja\" {% if cur=='ja' %}selected{% endif %}>日本語</option>
+          <option value=\"en\" {% if cur=='en' %}selected{% endif %}>English</option>
         </select>
       </form>
-      <span class="navbar-text text-light ms-3">{{ t('hello') }}，{{ (current_user.name if current_user.is_authenticated else 'Staff') }} ({{ t('role_staff') }})</span>
+      <span class=\"navbar-text text-light ms-3\">{{ t('hello') }}，{{ (current_user.name if current_user.is_authenticated else 'Staff') }} ({{ t('role_staff') }})</span>
+    </div>
+  </div>
+</nav>
+<div class=\"container py-3\">
+  {% block body %}{% endblock %}
+</div>
+<script src=\"https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js\"></script>
+</body>
+</html>
+"""
 
 LOGIN = """
 {% extends 'BASE' %}
 {% block body %}
-<div class="alert alert-info mt-3">Login is disabled. Redirecting to dashboard…</div>
-<meta http-equiv="refresh" content="0; url={{ with_lang(url_for('dashboard')) }}">
+<div class=\"alert alert-info mt-3\">Login is disabled. Redirecting to dashboard...</div>
+<meta http-equiv=\"refresh\" content=\"0; url={{ with_lang(url_for('dashboard')) }}\">
 {% endblock %}
 """
 
