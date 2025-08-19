@@ -391,24 +391,6 @@ BASE = """
         </select>
       </form>
       <span class="navbar-text text-light ms-3">{{ t('hello') }}，{{ (current_user.name if current_user.is_authenticated else 'Staff') }} ({{ t('role_staff') }})</span>
-    </div>
-  </div>
-</nav>
-<div class="container">
-  {% with messages = get_flashed_messages(with_categories=true) %}
-    {% if messages %}
-      <div class="mt-2">
-      {% for cat, msg in messages %}
-        <div class="alert alert-{{ cat }}">{{ msg }}</div>
-      {% endfor %}
-      </div>
-    {% endif %}
-  {% endwith %}
-  {% block body %}{% endblock %}
-</div>
-</body>
-</html>
-"""
 
 LOGIN = """
 {% extends 'BASE' %}
