@@ -531,28 +531,6 @@ SOP_FORM = """
   <div class="mb-3">
     <label class="form-label">{{ t('title') }}</label>
     <input name="title" class="form-control" value="{{ sop.title if sop else '' }}" required>
-  </div>
-  <div class="mb-3">
-    <label class="form-label">{{ t('category') }}</label>
-    <input name="category" class="form-control" value="{{ sop.category if sop else '' }}" required>
-  </div>
-  <div class="mb-3">
-    <label class="form-label">{{ t('villa') }}</label>
-    <select name="villa" class="form-select">
-      <option value="">—</option>
-      {% for v in villas %}
-      <option value="{{ v }}" {% if (sop and sop.villa==v) or (not sop and request.args.get('villa')==v) %}selected{% endif %}>{{ v }}</option>
-      {% endfor %}
-    </select>
-  </div>
-  <div class="mb-3">
-    <label class="form-label">{{ t('content') }}</label>
-    <textarea name="content" class="form-control" rows="8" required>{{ sop.content if sop else '' }}</textarea>
-  </div>
-  <button class="btn btn-primary">{{ t('save') }}</button>
-</form>
-{% endblock %}
-"""
 
 TASKS = """
 {% extends 'BASE' %}
