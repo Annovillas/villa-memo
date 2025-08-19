@@ -450,7 +450,7 @@ DASH = """
             <li class="list-group-item d-flex justify-content-between align-items-center">
               <div>
                 <strong>{{ task.title }}</strong>
-                <div class="small text-muted">{{ t('status') }}: {{ t(task.status) }}{% if task.assigned_to %}｜{{ t('assigned_to') }}: {{ task.assigned_to.name }}{% endif %}{% if task.due_date %}｜{{ t('due_date') }}: {{ task.due_date.date() }}{% endif %}</div>
+                <div class="small text-muted">{{ t('status') }}: {{ t(task.status) }}{% if task.assigned_to %}|{{ t('assigned_to') }}: {{ task.assigned_to.name }}{% endif %}{% if task.due_date %}|{{ t('due_date') }}: {{ task.due_date.date() }}{% endif %}</div>
               </div>
               <div><a class="btn btn-sm btn-outline-secondary" href="{{ with_lang(url_for('edit_task', task_id=task.id)) }}">{{ t('edit') }}</a></div>
             </li>
@@ -471,7 +471,7 @@ DASH = """
             <li class="list-group-item d-flex justify-content-between align-items-center">
               <div>
                 <strong>{{ c.villa }} / {{ c.area }}</strong>
-                <div class="small text-muted">{{ c.created_at.strftime('%Y-%m-%d %H:%M') }}｜{{ t('status') }}: {{ t(c.status) }}</div>
+                <div class="small text-muted">{{ c.created_at.strftime('%Y-%m-%d %H:%M') }}|{{ t('status') }}: {{ t(c.status) }}</div>
               </div>
               <a class="btn btn-sm btn-outline-secondary" href="{{ with_lang(url_for('edit_check', check_id=c.id)) }}">{{ t('edit') }}</a>
             </li>
@@ -515,7 +515,7 @@ SOPS = """
   <a class="list-group-item list-group-item-action" href="{{ with_lang(url_for('edit_sop', sop_id=s.id)) }}">
     <div class="d-flex w-100 justify-content-between">
       <h5 class="mb-1">{{ s.title }}</h5>
-      <small class="text-muted">{{ s.category }}{% if s.villa %} ｜ {{ s.villa }}{% endif %}</small>
+      <small class="text-muted">{{ s.category }}{% if s.villa %} | {{ s.villa }}{% endif %}</small>
     </div>
     <p class="mb-1 text-muted">{{ s.content[:120] }}{% if s.content|length>120 %}...{% endif %}</p>
   </a>
@@ -569,7 +569,7 @@ TASKS = """
   <li class="list-group-item d-flex justify-content-between align-items-center">
     <div>
       <strong>{{ task.title }}</strong>
-      <div class="small text-muted">{{ t('status') }}: {{ t(task.status) }}{% if task.assigned_to %}｜{{ t('assigned_to') }}: {{ task.assigned_to.name }}{% endif %}{% if task.due_date %}｜{{ t('due_date') }}: {{ task.due_date.date() }}{% endif %}</div>
+      <div class="small text-muted">{{ t('status') }}: {{ t(task.status) }}{% if task.assigned_to %}|{{ t('assigned_to') }}: {{ task.assigned_to.name }}{% endif %}{% if task.due_date %}|{{ t('due_date') }}: {{ task.due_date.date() }}{% endif %}</div>
     </div>
     <a class="btn btn-sm btn-outline-secondary" href="{{ with_lang(url_for('edit_task', task_id=task.id)) }}">{{ t('edit') }}</a>
   </li>
@@ -638,7 +638,7 @@ CHECKS = """
   <li class="list-group-item d-flex justify-content-between align-items-center">
     <div>
       <strong>{{ c.villa }} / {{ c.area }}</strong>
-      <div class="small text-muted">{{ c.created_at.strftime('%Y-%m-%d %H:%M') }}｜{{ t('status') }}: {{ t(c.status) }}</div>
+      <div class="small text-muted">{{ c.created_at.strftime('%Y-%m-%d %H:%M') }}|{{ t('status') }}: {{ t(c.status) }}</div>
       {% if c.notes %}<div class="text-muted small">{{ c.notes }}</div>{% endif %}
       {% if c.photo_path %}<a href="{{ url_for('uploaded_file', filename=c.photo_path.split('/')[-1]) }}" target="_blank">{{ t('photo') }}</a>{% endif %}
     </div>
@@ -1135,14 +1135,14 @@ def selftest():
     if request.method == 'POST':
         results = []
         try:
-            # root redirect
+            # Simple reachability marker
             results.append(R(True, 'Index reachable'))
         except Exception as e:
             results.append(R(False, f'Index error: {e}'))
         # DB basic
         try:
             _ = User.query.count()
-            results.append(R(True, 'DB reachable')))
+            results.append(R(True, 'DB reachable'))
         except Exception as e:
             results.append(R(False, f'DB error: {e}'))
         # Templates compile
@@ -1154,6 +1154,29 @@ def selftest():
             results.append(R(True, 'Templates render'))
         except Exception as e:
             results.append(R(False, f'Template error: {e}'))
+        # Extra tests (added)
+        try:
+            assert len(VILLAS) == 24
+            results.append(R(True, 'VILLAS has 24 items'))
+        except Exception as e:
+            results.append(R(False, f'VILLAS error: {e}'))
+        try:
+            admin = User.query.filter_by(email='admin@villa.local').first()
+            staff = User.query.filter_by(email='stanley@villa.local').first()
+            assert admin is not None and staff is not None
+            results.append(R(True, 'Seed users exist'))
+        except Exception as e:
+            results.append(R(False, f'Seed users missing: {e}'))
+        try:
+            tmp = Task(title='__selftest__', status='pending')
+            db.session.add(tmp)
+            db.session.commit()
+            assert tmp.id is not None
+            db.session.delete(tmp)
+            db.session.commit()
+            results.append(R(True, 'DB write ok (Task create/delete)'))
+        except Exception as e:
+            results.append(R(False, f'DB write error: {e}'))
     return render_template('SELFTEST', results=results)
 
 
