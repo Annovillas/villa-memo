@@ -119,6 +119,12 @@ I18N: Dict[str, Dict[str, str]] = {
         'upload_ok': '已上傳',
         'sop_by_villa': '各別墅 SOP 快捷',
         'all_villas': '全部別墅',
+        'access_title': '訪問驗證',
+        'access_code': '入口口令',
+        'access_hint': '請輸入口令以進入系統',
+        'access_submit': '確認',
+        'access_denied': '口令錯誤',
+        'filter_villa': '別墅篩選',
     },
     'ja': {
         'app_title': 'ヴィラ・スタッフ・メモ',
@@ -160,6 +166,12 @@ I18N: Dict[str, Dict[str, str]] = {
         'upload_ok': 'アップロードしました',
         'sop_by_villa': 'ヴィラ別 SOP ショートカット',
         'all_villas': 'すべてのヴィラ',
+        'access_title': 'アクセス認証',
+        'access_code': 'アクセスコード',
+        'access_hint': 'コードを入力してください',
+        'access_submit': '送信',
+        'access_denied': 'コードが間違っています',
+        'filter_villa': 'ヴィラ絞り込み',
     },
     'en': {
         'app_title': 'Villa Staff Memo',
@@ -201,6 +213,12 @@ I18N: Dict[str, Dict[str, str]] = {
         'upload_ok': 'Uploaded',
         'sop_by_villa': 'SOP by Villa',
         'all_villas': 'All Villas',
+        'access_title': 'Access Required',
+        'access_code': 'Access Code',
+        'access_hint': 'Enter the code to continue',
+        'access_submit': 'Confirm',
+        'access_denied': 'Invalid access code',
+        'filter_villa': 'Filter by Villa',
     }
 }
 
@@ -605,7 +623,18 @@ CHECKS = """
 {% block body %}
 <div class="d-flex justify-content-between align-items-center mb-2">
   <h4>{{ t('checks') }}</h4>
-  <a class="btn btn-primary" href="{{ with_lang(url_for('new_check')) }}">＋ {{ t('new_check') }}</a>
+  <div class="d-flex gap-2">
+    <form class="d-flex" method="get" action="{{ url_for('list_checks') }}">
+      <input type="hidden" name="lang" value="{{ request.args.get('lang') or request.cookies.get('lang') or 'zh' }}">
+      <select class="form-select me-2" name="villa" onchange="this.form.submit()">
+        <option value="">{{ t('all_villas') }}</option>
+        {% for v in villas %}
+        <option value="{{ v }}" {% if request.args.get('villa')==v %}selected{% endif %}>{{ v }}</option>
+        {% endfor %}
+      </select>
+    </form>
+    <a class="btn btn-primary" href="{{ with_lang(url_for('new_check', villa=request.args.get('villa'))) }}">＋ {{ t('new_check') }}</a>
+  </div>
 </div>
 <ul class="list-group">
 {% for c in checks %}
@@ -632,7 +661,40 @@ CHECK_FORM = """
 <form method="post" enctype="multipart/form-data">
   <div class="mb-3">
     <label class="form-label">{{ t('villa') }}</label>
-    <input name="villa" class="form-control" value="{{ check.villa if check else '' }}" required>
+    <select name="villa" class="form-select" required>
+      <option value="">—</option>
+      {% for v in villas %}
+      <option value="{{ v }}" {% if (check and check.villa==v) or (not check and request.args.get('villa')==v) %}selected{% endif %}>{{ v }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="mb-3">
+    <label class="form-label">{{ t('area') }}</label>
+    <input name="area" class="form-control" value="{{ check.area if check else '' }}" required>
+  </div>
+  <div class="mb-3">
+    <label class="form-label">{{ t('notes') }}</label>
+    <textarea name="notes" class="form-control" rows="4">{{ check.notes if check else '' }}</textarea>
+  </div>
+  <div class="mb-3">
+    <label class="form-label">{{ t('photo') }}</label>
+    <input type="file" name="photo" class="form-control" accept="image/*">
+    {% if check and check.photo_path %}
+      <div class="form-text"><a href="{{ url_for('uploaded_file', filename=check.photo_path.split('/')[-1]) }}" target="_blank">{{ t('photo') }}</a></div>
+    {% endif %}
+  </div>
+  <div class="mb-3">
+    <label class="form-label">{{ t('status') }}</label>
+    <select name="status" class="form-select">
+      {% for s in ['pending','in_progress','done'] %}
+      <option value="{{ s }}" {% if check and check.status==s %}selected{% endif %}>{{ t(s) }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <button class="btn btn-primary">{{ t('save') }}</button>
+</form>
+{% endblock %}
+"""
   </div>
   <div class="mb-3">
     <label class="form-label">{{ t('area') }}</label>
@@ -664,6 +726,29 @@ CHECK_FORM = """
 
 # Register templates into Jinja env
 app.jinja_env.globals.update(t=t, with_lang=with_lang)
+ACCESS = """
+{% extends 'BASE' %}
+{% block body %}
+<div class="row justify-content-center">
+  <div class="col-md-6">
+    <div class="card shadow-sm">
+      <div class="card-body">
+        <h4 class="mb-3">{{ t('access_title') }}</h4>
+        <p class="text-muted">{{ t('access_hint') }}</p>
+        <form method="post">
+          <div class="mb-3">
+            <label class="form-label">{{ t('access_code') }}</label>
+            <input type="password" class="form-control" name="access" required>
+          </div>
+          <button class="btn btn-primary">{{ t('access_submit') }}</button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+"""
+
 app.jinja_loader = DictLoader({
     'BASE': BASE,
     'LOGIN': LOGIN,
@@ -674,6 +759,7 @@ app.jinja_loader = DictLoader({
     'TASK_FORM': TASK_FORM,
     'CHECKS': CHECKS,
     'CHECK_FORM': CHECK_FORM,
+    'ACCESS': ACCESS,
 })
 
 # ------------------------------
@@ -685,12 +771,28 @@ def health():
 
 @app.before_request
 def persist_lang_cookie_and_auto_login():
-    # Record language to set cookie later (handled by a single global after_request)
+    # 1) Access gate (optional via ACCESS_CODE)
     g.lang_to_set = None
     lang = request.args.get('lang')
     if lang:
         g.lang_to_set = lang
-    # Auto-login as Staff (no login page)
+
+    access_code = os.environ.get('ACCESS_CODE')
+    if access_code:
+        # allowlist endpoints
+        allowed_eps = {'health', 'access', 'static'}
+        ep = (request.endpoint or '').split('.')[-1]
+        has_cookie = request.cookies.get('ac') == access_code
+        from_query = request.args.get('access')
+        if from_query and from_query == access_code:
+            # mark to set cookie after response
+            g._set_access_cookie = True
+        elif not has_cookie and ep not in allowed_eps:
+            # redirect to /access with next param
+            nxt = request.full_path if request.query_string else request.path
+            return redirect(url_for('access', next=nxt))
+
+    # 2) Auto-login as Staff (no login page)
     if not current_user.is_authenticated:
         staff = User.query.filter_by(email='staff@example.com').first()
         if staff:
@@ -702,6 +804,9 @@ def apply_lang_cookie(response):
     try:
         if getattr(g, 'lang_to_set', None):
             response.set_cookie('lang', g.lang_to_set, max_age=30*24*3600)
+        if getattr(g, '_set_access_cookie', False):
+            # simple cookie to remember ACCESS_CODE validation
+            response.set_cookie('ac', os.environ.get('ACCESS_CODE',''), max_age=7*24*3600, httponly=True)
     except Exception:
         pass
     return response
@@ -716,6 +821,21 @@ def index():
 def login():
     # Login disabled: just go to dashboard
     return redirect(with_lang(url_for('dashboard')))
+
+@app.route('/access', methods=['GET','POST'])
+def access():
+    access_code = os.environ.get('ACCESS_CODE')
+    if not access_code:
+        # If no gate configured, just go home
+        return redirect(with_lang(url_for('dashboard')))
+    if request.method == 'POST':
+        if request.form.get('access') == access_code:
+            g._set_access_cookie = True
+            nxt = request.args.get('next') or url_for('dashboard')
+            return redirect(with_lang(nxt))
+        else:
+            flash(t('access_denied'), 'warning')
+    return render_template('ACCESS')
 
 
 @app.route('/logout')
@@ -827,8 +947,12 @@ def edit_task(task_id):
 @app.route('/checks')
 @login_required
 def list_checks():
-    checks = Check.query.order_by(Check.created_at.desc()).all()
-    return render_template('CHECKS', checks=checks)
+    villa = request.args.get('villa') or None
+    q = Check.query
+    if villa:
+        q = q.filter(Check.villa == villa)
+    checks = q.order_by(Check.created_at.desc()).all()
+    return render_template('CHECKS', checks=checks, villas=VILLAS)
 
 
 def allowed_file(fn: str) -> bool:
@@ -858,7 +982,7 @@ def new_check():
         db.session.add(c)
         db.session.commit()
         return redirect(with_lang(url_for('list_checks')))
-    return render_template('CHECK_FORM', check=None)
+    return render_template('CHECK_FORM', check=None, villas=VILLAS)
 
 
 @app.route('/checks/<int:check_id>/edit', methods=['GET', 'POST'])
@@ -882,7 +1006,7 @@ def edit_check(check_id):
             flash(t('upload_ok'), 'success')
         db.session.commit()
         return redirect(with_lang(url_for('list_checks')))
-    return render_template('CHECK_FORM', check=c)
+    return render_template('CHECK_FORM', check=c, villas=VILLAS)
 
 
 # ---- Uploads ----
