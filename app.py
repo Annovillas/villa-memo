@@ -235,12 +235,9 @@ def _load_villas() -> list:
     """
     raw = os.environ.get('VILLA_NAMES', '').strip()
     if raw:
-        # Split by commas and/or newlines safely (use escaped literals!)
-        tmp = raw.replace('', '
-').replace(',', '
-')
-        names = [n.strip() for n in tmp.split('
-') if n.strip()]
+        # Split by commas and/or newlines safely using escaped literals
+        tmp = raw.replace('\r', '\n').replace(',', '\n')
+        names = [n.strip() for n in tmp.split('\n') if n.strip()]
     else:
         # ← Default list from your request (22 names)
         names = [
@@ -275,6 +272,7 @@ def _load_villas() -> list:
     return names
 
 VILLAS = _load_villas()
+
 
 
 
