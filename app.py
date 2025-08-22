@@ -1133,6 +1133,16 @@ def edit_task(task_id):
     return render_template('TASK_FORM', task=task, users=users)
 
 # ---- Checks ----
+@app.route('/checks')
+@login_required
+def list_checks():
+    villa = request.args.get('villa') or None
+    q = Check.query
+    if villa:
+        q = q.filter_by(villa=villa)
+    checks = q.order_by(Check.created_at.desc()).all()
+    return render_template('CHECKS', checks=checks, villas=VILLAS)
+
 @app.route('/checks/new', methods=['GET','POST'])
 @login_required
 def new_check():
