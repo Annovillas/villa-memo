@@ -916,9 +916,14 @@ def ensure_seed_users() -> None:
     add('akshay', 'akshay@villa.local', 'staff', '1003+')
     add('mahesh', 'mahesh@villa.local', 'staff', '1004+')
     add('shekher', 'shekher@villa.local', 'staff', '1005+')
-    add('edrian', 'edrian@villa.local', 'staff', '1006+')
-# ------------------------------
-# Login
+    add('Edrian', 'edrian@villa.local', 'staff', '1006+')
+
+    # commit once (safe if nothing changed)
+    try:
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        app.logger.error(f'Seed commit failed: {e}')
 # ------------------------------
 @login_manager.user_loader
 def load_user(user_id: str) -> Optional[User]:
@@ -1115,6 +1120,126 @@ def edit_task(task_id):
         task.title = request.form['title']
         task.status = request.form.get('status','pending')
         assigned_to_id = request.form.get('assigned_to') or None
-        task.assigned_to = User.query.get(int(assigned_to_id)) if assigned_to_id else None
         due_date = request.form.get('due_date') or None
+        task.assigned_to = User.query.get(int(assigned_to_id)) if assigned_to_id else None
         if due_date:
+            try:
+                task.due_date = datetime.strptime(due_date, '%Y-%m-%d')
+            except Exception:
+                pass
+        db.session.commit()
+        return redirect(with_lang(url_for('list_tasks')))
+    users = User.query.order_by(User.name.asc()).all()
+    return render_template('TASK_FORM', task=task, users=users)
+
+# ---- Checks ----
+@app.route('/checks/new', methods=['GET','POST'])
+@login_required
+def new_check():
+    if request.method == 'POST':
+        villa = request.form['villa']
+        area = request.form['area']
+        notes = request.form.get('notes') or ''
+        status = request.form.get('status','pending')
+        photo = request.files.get('photo')
+        photo_path = None
+        if photo and allowed_file(photo.filename):
+            fname = datetime.utcnow().strftime('%Y%m%d%H%M%S_') + secure_filename(photo.filename)
+            dest = Path(app.config['UPLOAD_FOLDER']) / fname
+            try:
+                photo.save(str(dest))
+                photo_path = str(dest)
+            except Exception:
+                photo_path = None
+        c = Check(villa=villa, area=area, notes=notes, status=status, photo_path=photo_path, created_by=current_user)
+        db.session.add(c)
+        db.session.commit()
+        return redirect(with_lang(url_for('list_checks', villa=villa)))
+    return render_template('CHECK_FORM', check=None, villas=VILLAS)
+
+@app.route('/checks/<int:check_id>/edit', methods=['GET','POST'])
+@login_required
+def edit_check(check_id):
+    check = Check.query.get_or_404(check_id)
+    if request.method == 'POST':
+        check.villa = request.form['villa']
+        check.area = request.form['area']
+        check.notes = request.form.get('notes') or ''
+        check.status = request.form.get('status','pending')
+        photo = request.files.get('photo')
+        if photo and allowed_file(photo.filename):
+            fname = datetime.utcnow().strftime('%Y%m%d%H%M%S_') + secure_filename(photo.filename)
+            dest = Path(app.config['UPLOAD_FOLDER']) / fname
+            try:
+                photo.save(str(dest))
+                check.photo_path = str(dest)
+            except Exception:
+                pass
+        db.session.commit()
+        return redirect(with_lang(url_for('list_checks', villa=check.villa)))
+    return render_template('CHECK_FORM', check=check, villas=VILLAS)
+
+# ---- Files ----
+@app.route('/uploads/<path:filename>')
+@login_required
+def uploaded_file(filename):
+    safe = secure_filename(filename)
+    return send_from_directory(app.config['UPLOAD_FOLDER'], safe)
+
+# ---- Admin Users ----
+@app.route('/admin/users')
+@login_required
+@admin_required
+def admin_users():
+    users = User.query.order_by(User.id.asc()).all()
+    return render_template('USERS', users=users)
+
+@app.route('/admin/users/new', methods=['GET','POST'])
+@login_required
+@admin_required
+def admin_users_new():
+    if request.method == 'POST':
+        name = request.form['name']
+        email = request.form['email']
+        role = request.form.get('role','staff')
+        password = request.form['password']
+        u = User(name=name, email=email, role=role)
+        u.set_password(password)
+        db.session.add(u)
+        db.session.commit()
+        return redirect(with_lang(url_for('admin_users')))
+    return render_template('USER_FORM')
+
+# ---- Self Test ----
+@dataclass
+class TestResult:
+    msg: str
+    ok: bool
+
+@app.route('/selftest', methods=['GET','POST'])
+def selftest():
+    results: List[TestResult] | None = None
+    if request.method == 'POST':
+        results = []
+        try:
+            _ = render_template('LOGIN')
+            results.append(TestResult('Render templates', True))
+        except Exception as e:
+            results.append(TestResult(f'Render templates: {e}', False))
+        try:
+            db.create_all()
+            ensure_seed_users()
+            results.append(TestResult('DB create_all + seed', True))
+        except Exception as e:
+            results.append(TestResult(f'DB init: {e}', False))
+        try:
+            cnt = User.query.count()
+            results.append(TestResult(f'User count = {cnt}', True))
+        except Exception as e:
+            results.append(TestResult(f'DB query users: {e}', False))
+    return render_template('SELFTEST', results=results)
+
+# ---- Main ----
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 8000))
+    app.run(host='0.0.0.0', port=port, debug=(os.environ.get('FLASK_DEBUG','0')=='1'))
