@@ -899,17 +899,23 @@ def allowed_file(filename: str) -> bool:
 
 
 def ensure_seed_users() -> None:
-    """Create default users once."""
-    if User.query.filter_by(email='admin@villa.local').first() is None:
-        u = User(email='admin@villa.local', name='admin', role='admin')
-        u.set_password('10051005+')
-        db.session.add(u)
-    if User.query.filter_by(email='stanley@villa.local').first() is None:
-        u2 = User(email='stanley@villa.local', name='Stanley', role='staff')
-        u2.set_password('0585')
-        db.session.add(u2)
-    db.session.commit()
+    """Create default users once (idempotent)."""
+    def add(name: str, email: str, role: str, pw: str) -> None:
+        existing = User.query.filter((User.email == email) | (User.name == name)).first()
+        if existing is None:
+            u = User(email=email, name=name, role=role)
+            u.set_password(pw)
+            db.session.add(u)
 
+    # built-ins
+    add('admin', 'admin@villa.local', 'admin', '10051005+')
+    add('Stanley', 'stanley@villa.local', 'staff', '0585')
+
+    # extra staff seeds
+    add('ooshiro', 'ooshiro@villa.local', 'staff', '1002+')
+    add('akshay', 'akshay@villa.local', 'staff', '1003+')
+    add('mahesh', 'mahesh@villa.local', 'staff', '1004+')
+    add('she
 # ------------------------------
 # Login
 # ------------------------------
@@ -1111,157 +1117,3 @@ def edit_task(task_id):
         task.assigned_to = User.query.get(int(assigned_to_id)) if assigned_to_id else None
         due_date = request.form.get('due_date') or None
         if due_date:
-            try:
-                task.due_date = datetime.strptime(due_date, '%Y-%m-%d')
-            except Exception:
-                pass
-        db.session.commit()
-        return redirect(with_lang(url_for('list_tasks')))
-    users = User.query.order_by(User.name.asc()).all()
-    return render_template('TASK_FORM', task=task, users=users)
-
-# ---- Checks ----
-@app.route('/checks')
-@login_required
-def list_checks():
-    villa = request.args.get('villa')
-    q = Check.query
-    if villa:
-        q = q.filter_by(villa=villa)
-    checks = q.order_by(Check.created_at.desc()).all()
-    return render_template('CHECKS', checks=checks, villas=VILLAS)
-
-@app.route('/checks/new', methods=['GET','POST'])
-@login_required
-def new_check():
-    if request.method == 'POST':
-        c = Check(
-            villa=request.form['villa'],
-            area=request.form['area'],
-            notes=request.form.get('notes') or None,
-            status=request.form.get('status','pending'),
-            created_by=current_user,
-        )
-        file = request.files.get('photo')
-        if file and file.filename and allowed_file(file.filename):
-            filename = secure_filename(file.filename)
-            save_path = str(Path(app.config['UPLOAD_FOLDER']) / filename)
-            file.save(save_path)
-            c.photo_path = save_path
-        db.session.add(c)
-        db.session.commit()
-        return redirect(with_lang(url_for('list_checks', villa=c.villa)))
-    return render_template('CHECK_FORM', check=None, villas=VILLAS)
-
-@app.route('/checks/<int:check_id>/edit', methods=['GET','POST'])
-@login_required
-def edit_check(check_id):
-    c = Check.query.get_or_404(check_id)
-    if request.method == 'POST':
-        c.villa = request.form['villa']
-        c.area = request.form['area']
-        c.notes = request.form.get('notes') or None
-        c.status = request.form.get('status','pending')
-        file = request.files.get('photo')
-        if file and file.filename and allowed_file(file.filename):
-            filename = secure_filename(file.filename)
-            save_path = str(Path(app.config['UPLOAD_FOLDER']) / filename)
-            file.save(save_path)
-            c.photo_path = save_path
-        db.session.commit()
-        return redirect(with_lang(url_for('list_checks', villa=c.villa)))
-    return render_template('CHECK_FORM', check=c, villas=VILLAS)
-
-@app.route('/uploads/<path:filename>')
-@login_required
-def uploaded_file(filename):
-    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
-
-# ---- Admin Users ----
-@app.route('/admin/users')
-@login_required
-@admin_required
-def admin_users():
-    users = User.query.order_by(User.id.asc()).all()
-    return render_template('USERS', users=users)
-
-@app.route('/admin/users/new', methods=['GET','POST'])
-@login_required
-@admin_required
-def admin_users_new():
-    if request.method == 'POST':
-        u = User(name=request.form['name'], email=request.form['email'], role=request.form.get('role','staff'))
-        u.set_password(request.form['password'])
-        db.session.add(u)
-        db.session.commit()
-        return redirect(with_lang(url_for('admin_users')))
-    return render_template('USER_FORM')
-
-# ---- Debug helper: show DB URI (admin only) ----
-@app.route('/admin/dburi')
-@login_required
-@admin_required
-def show_dburi():
-    return app.config['SQLALCHEMY_DATABASE_URI']
-
-# ---- Self Test ----
-@dataclass
-class R:
-    ok: bool
-    msg: str
-
-@app.route('/selftest', methods=['GET','POST'])
-def selftest():
-    results: List[R] = [] if request.method == 'POST' else None
-    if request.method == 'POST':
-        try:
-            results.append(R(True, 'App loaded'))
-            # DB URL normalized
-            uri = app.config['SQLALCHEMY_DATABASE_URI']
-            results.append(R(uri.startswith('sqlite') or bool(uri), f'DB URI = {uri}'))
-
-            # DB path existence (sqlite only)
-            if uri.startswith('sqlite:////'):
-                p = uri.replace('sqlite:////','/',1)
-                results.append(R(Path(p).parent.exists(), f'DB dir exists: {Path(p).parent}'))
-                results.append(R(Path(p).exists(), f'DB file exists: {p}'))
-
-            # Try connect
-            try:
-                with db.engine.connect() as conn:
-                    conn.execute(db.text('SELECT 1'))
-                results.append(R(True, 'DB connect ok'))
-            except Exception as e:
-                results.append(R(False, f'DB connect failed: {e}'))
-
-            # create_all
-            try:
-                db.create_all()
-                results.append(R(True, 'create_all ok'))
-            except Exception as e:
-                results.append(R(False, f'create_all failed: {e}'))
-
-            # seed users
-            try:
-                ensure_seed_users()
-                results.append(R(True, 'seed users ok'))
-            except Exception as e:
-                results.append(R(False, f'seed users failed: {e}'))
-
-            # templates render
-            try:
-                render_template('LOGIN')
-                results.append(R(True, 'templates loaded'))
-            except Exception as e:
-                results.append(R(False, f'templates failed: {e}'))
-
-        except Exception as e:
-            results.append(R(False, f'Fatal: {e}'))
-    return render_template('SELFTEST', results=results)
-
-# ------------------------------
-# Entrypoint
-# ------------------------------
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', '8000'))
-    app.run(host='0.0.0.0', port=port, debug=True)

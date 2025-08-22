@@ -1,0 +1,7 @@
+{% extends 'base.html' %}{% block body %}
+<div class="row justify-content-center"><div class="col-md-6"><div class="card shadow-sm"><div class="card-body">
+  <h4 class="mb-3">{{ t('access_title') }}</h4><p class="text-muted">{{ t('access_hint') }}</p>
+  <form method="post"><div class="mb-3"><label class="form-label">{{ t('access_code') }}</label>
+    <input type="password" class="form-control" name="access" required></div>
+    <button class="btn btn-primary">{{ t('access_submit') }}</button></form>
+</div></div></div></div>{% endblock %}

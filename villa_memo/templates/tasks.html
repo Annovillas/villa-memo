@@ -1,0 +1,16 @@
+{% extends 'base.html' %}{% block body %}
+<div class="d-flex justify-content-between align-items-center mb-2">
+  <h4>{{ t('tasks') }}</h4>
+  <a class="btn btn-primary" href="{{ with_lang(url_for('new_task')) }}">+ {{ t('new_task') }}</a>
+</div>
+<ul class="list-group">
+{% for task in tasks %}
+  <li class="list-group-item d-flex justify-content-between align-items-center">
+    <div><strong>{{ task.title }}</strong>
+      <div class="small text-muted">{{ t('status') }}: {{ t(task.status) }}{% if task.assigned_to %}|{{ t('assigned_to') }}: {{ task.assigned_to.name }}{% endif %}{% if task.due_date %}|{{ t('due_date') }}: {{ task.due_date.date() }}{% endif %}</div>
+    </div>
+    <a class="btn btn-sm btn-outline-secondary" href="{{ with_lang(url_for('edit_task', task_id=task.id)) }}">{{ t('edit') }}</a>
+  </li>
+{% else %}<li class="list-group-item">—</li>{% endfor %}
+</ul>
+{% endblock %}

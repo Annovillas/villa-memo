@@ -1,0 +1,22 @@
+{% extends 'base.html' %}{% block body %}
+<h4>{{ 'Edit' if task else 'Create' }} {{ t('tasks') }}</h4>
+<form method="post">
+  <div class="mb-3"><label class="form-label">{{ t('title') }}</label>
+    <input name="title" class="form-control" value="{{ task.title if task else '' }}" required></div>
+  <div class="mb-3"><label class="form-label">{{ t('status') }}</label>
+    <select name="status" class="form-select">
+      {% for s in ['pending','in_progress','done'] %}<option value="{{ s }}" {% if task and task.status==s %}selected{% endif %}>{{ t(s) }}</option>{% endfor %}
+    </select>
+  </div>
+  <div class="mb-3"><label class="form-label">{{ t('assigned_to') }}</label>
+    <select name="assigned_to" class="form-select">
+      <option value="">—</option>
+      {% for u in users %}<option value="{{ u.id }}" {% if task and task.assigned_to and task.assigned_to.id==u.id %}selected{% endif %}>{{ u.name }} ({{ u.role }})</option>{% endfor %}
+    </select>
+  </div>
+  <div class="mb-3"><label class="form-label">{{ t('due_date') }}</label>
+    <input type="date" name="due_date" class="form-control" value="{{ task.due_date.date() if task and task.due_date else '' }}">
+  </div>
+  <button class="btn btn-primary">{{ t('save') }}</button>
+</form>
+{% endblock %}

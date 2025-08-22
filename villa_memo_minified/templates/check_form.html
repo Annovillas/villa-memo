@@ -1,0 +1,29 @@
+{% extends 'base.html' %}{% block body %}
+<h4>{{ 'Edit' if check else 'Create' }} {{ t('checks') }}</h4>
+<form method="post" enctype="multipart/form-data">
+  <div class="mb-3"><label class="form-label">{{ t('villa') }}</label>
+    <select name="villa" class="form-select" required>
+      <option value="">—</option>
+      {% for v in villas %}<option value="{{ v }}" {% if (check and check.villa==v) or (not check and request.args.get('villa')==v) %}selected{% endif %}>{{ v }}</option>{% endfor %}
+    </select>
+  </div>
+  <div class="mb-3"><label class="form-label">{{ t('area') }}</label>
+    <input name="area" class="form-control" value="{{ check.area if check else '' }}" required>
+  </div>
+  <div class="mb-3"><label class="form-label">{{ t('notes') }}</label>
+    <textarea name="notes" class="form-control" rows="4">{{ check.notes if check else '' }}</textarea>
+  </div>
+  <div class="mb-3"><label class="form-label">{{ t('photo') }}</label>
+    <input type="file" name="photo" class="form-control" accept="image/*">
+    {% if check and check.photo_path %}
+      <div class="form-text"><a href="{{ url_for('uploaded_file', filename=check.photo_path.split('/')[-1]) }}" target="_blank">{{ t('photo') }}</a></div>
+    {% endif %}
+  </div>
+  <div class="mb-3"><label class="form-label">{{ t('status') }}</label>
+    <select name="status" class="form-select">{% for s in ['pending','in_progress','done'] %}
+      <option value="{{ s }}" {% if check and check.status==s %}selected{% endif %}>{{ t(s) }}</option>{% endfor %}
+    </select>
+  </div>
+  <button class="btn btn-primary">{{ t('save') }}</button>
+</form>
+{% endblock %}

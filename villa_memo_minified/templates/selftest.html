@@ -1,0 +1,10 @@
+{% extends 'base.html' %}{% block body %}
+<div class="row justify-content-center"><div class="col-lg-8"><div class="card shadow-sm"><div class="card-body">
+  <h4 class="mb-3">Self Test</h4><p class="text-muted">Quick smoke checks for routes, templates, and DB.</p>
+  <form method="post"><button class="btn btn-primary">Run Tests</button>
+    <a class="btn btn-outline-secondary ms-2" href="{{ with_lang(url_for('login')) }}">Go Login</a></form>
+  {% if results is not none %}<hr><h6>Results</h6><ul class="list-group">
+    {% for r in results %}<li class="list-group-item d-flex justify-content-between align-items-center">
+      <span>{{ r.msg }}</span><span class="badge bg-{{ 'success' if r.ok else 'danger' }}">{{ 'OK' if r.ok else 'FAIL' }}</span></li>{% endfor %}
+  </ul>{% endif %}
+</div></div></div></div>{% endblock %}
