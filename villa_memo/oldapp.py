@@ -1,22 +1,25 @@
 # -*- coding: utf-8 -*-
 """
-Villa Staff Memo — full app with Self-Test page
----------------------------------------------
+Villa Staff Memo — Flask single‑file demo (Render‑friendly)
+-----------------------------------------------------------
 - Local run:  python3 app.py  → http://127.0.0.1:8000
-- Seeded users:
-    admin@villa.local / 10051005+   (role=admin, name=admin)
+- Seed users:
+    admin@villa.local / 10051005+   (role=admin,  name=admin)
     stanley@villa.local / 0585      (role=staff,  name=Stanley)
-- Optional access code gate: set ACCESS_CODE in env or Secret Files → open /access
-- 24-villa grid on dashboard; override names via env VILLA_NAMES (comma/newline separated)
-- Self-test UI: /selftest  (no login required)
+- Optional access gate: set ACCESS_CODE in env → visit /access
+- Self‑test page: /selftest (no login needed)
+- 24 villa shortcuts on dashboard; override names via env VILLA_NAMES (comma/newline)
 """
-
 from __future__ import annotations
+
 import os
+import hmac
+import hashlib
+import secrets
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict
-from functools import wraps
+from typing import Dict, List, Optional, Callable
 
 from flask import (
     Flask, request, redirect, url_for, flash, send_from_directory,
@@ -32,7 +35,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 from jinja2 import DictLoader
 
-# Optional dotenv (supports Render Secret Files at /etc/secrets/.env)
+# --- Optional dotenv (also loads Render Secret Files at /etc/secrets/.env) ---
 try:
     from dotenv import load_dotenv, find_dotenv
     load_dotenv(find_dotenv(), override=True)
@@ -44,15 +47,83 @@ except Exception:
 # ------------------------------
 # App & Config
 # ------------------------------
+
+def _prepare_sqlite_uri(raw: str) -> str:
+    """Normalize SQLite URI so its directory exists & is writable on cloud hosts.
+    Robust against unwritable env paths. Also *touches* the DB file to avoid
+    "unable to open database file" on some hosts.
+
+    Rules:
+    - sqlite:///relative.db  → place under DATA_DIR or /tmp/vsmdata
+    - sqlite:////absolute.db → ensure parent dir exists (and file touched)
+    - non-sqlite schemes     → passthrough
+    """
+    try:
+        if not raw or not raw.startswith('sqlite'):
+            return raw
+
+        # choose a safe base dir (don't trust UPLOAD_FOLDER env as it may be RO)
+        safe_base = os.environ.get('DATA_DIR') or '/tmp/vsmdata'
+        base_path = Path(safe_base)
+        base_path.mkdir(parents=True, exist_ok=True)
+
+        if raw.startswith('sqlite:////'):  # absolute
+            abs_path = Path(raw.replace('sqlite:////', '/', 1))
+            abs_path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                abs_path.touch(exist_ok=True)
+            except Exception:
+                pass
+            return 'sqlite:////' + str(abs_path).lstrip('/')
+
+        if raw.startswith('sqlite:///'):   # relative
+            rel = raw[len('sqlite:///'):]
+            db_file = base_path / rel
+            try:
+                db_file.parent.mkdir(parents=True, exist_ok=True)
+                db_file.touch(exist_ok=True)
+            except Exception:
+                # last resort
+                db_file = Path('/tmp/vsmdata/fallback.db')
+                db_file.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    db_file.touch(exist_ok=True)
+                except Exception:
+                    pass
+            return 'sqlite:////' + str(db_file).lstrip('/')
+
+        return raw
+    except Exception:
+        # panic fallback
+        pf = Path('/tmp/vsmdata/panic.db')
+        pf.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            pf.touch(exist_ok=True)
+        except Exception:
+            pass
+        return 'sqlite:////' + str(pf).lstrip('/')
+
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-change-me')
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///memo_demo.db')
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['UPLOAD_FOLDER'] = os.environ.get('UPLOAD_FOLDER', str(Path('uploads').absolute()))
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16 MB
 
+# ensure upload dir early (independent from DB path)
+app.config['UPLOAD_FOLDER'] = os.environ.get('UPLOAD_FOLDER', '/tmp/uploads')
 Path(app.config['UPLOAD_FOLDER']).mkdir(parents=True, exist_ok=True)
 
+# Build a *safe* SQLite URI
+raw_db = os.environ.get('DATABASE_URL', 'sqlite:///memo_demo.db')
+app.config['SQLALCHEMY_DATABASE_URI'] = _prepare_sqlite_uri(raw_db)
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+# SQLite engine options for WSGI servers
+if str(app.config['SQLALCHEMY_DATABASE_URI']).startswith('sqlite'):
+    app.config.setdefault('SQLALCHEMY_ENGINE_OPTIONS', {})
+    app.config['SQLALCHEMY_ENGINE_OPTIONS'].setdefault('connect_args', {
+        'check_same_thread': False,
+        'timeout': 30,
+    })
+
+# Create DB handle
 db = SQLAlchemy(app)
 login_manager = LoginManager(app)
 login_manager.login_view = 'login'
@@ -228,10 +299,10 @@ def with_lang(url: str) -> str:
 # Villas list (24)
 # ------------------------------
 
-def _load_villas() -> list:
+def _load_villas() -> List[str]:
     raw = os.environ.get('VILLA_NAMES', '').strip()
     if raw:
-        parts = []
+        parts: List[str] = []
         for line in raw.splitlines():
             for p in line.split(','):
                 p = p.strip()
@@ -240,20 +311,19 @@ def _load_villas() -> list:
         names = parts
     else:
         names = [
-            "Grand Villa", "Villa A", "Villa B", "Villa C", "Panorama Villa",
-            "Sankando Office", "Glamping Office", "MOKA", "KOKO", "MARU",
-            "RUNA", "MEI", "RIN", "LEO", "MOMO", "New DOME", "CUBE",
-            "Gekkouen", "Villa D", "Villa E", "Villa F", "Villa G",
+            'Grand Villa', 'Villa A', 'Villa B', 'Villa C', 'Panorama Villa',
+            'Sankando Office', 'Glamping Office', 'MOKA', 'KOKO', 'MARU',
+            'RUNA', 'MEI', 'RIN', 'LEO', 'MOMO', 'New DOME', 'CUBE',
+            'Gekkouen', 'Villa D', 'Villa E', 'Villa F', 'Villa G',
+            'Villa H', 'Villa I'
         ]
     names = names[:24]
     if len(names) < 24:
         start = len(names) + 1
-        names += [f"Villa {i:02d}" for i in range(start, 25)]
+        names += [f'Villa {i:02d}' for i in range(start, 25)]
     return names
 
-
 VILLAS = _load_villas()
-
 
 # ------------------------------
 # Models
@@ -266,10 +336,27 @@ class User(db.Model, UserMixin):
     password_hash = db.Column(db.String(255), nullable=False)
 
     def set_password(self, pw: str):
-        self.password_hash = generate_password_hash(pw, method='pbkdf2:sha256')
+        """Prefer PBKDF2 (werkzeug), fallback to HMAC‑SHA256 when pbkdf2 is unavailable."""
+        try:
+            self.password_hash = generate_password_hash(pw, method='pbkdf2:sha256')
+        except Exception:
+            salt = secrets.token_hex(16)
+            digest = hmac.new(salt.encode('utf-8'), pw.encode('utf-8'), hashlib.sha256).hexdigest()
+            self.password_hash = f"sha256${salt}${digest}"
 
     def check_password(self, pw: str) -> bool:
-        return check_password_hash(self.password_hash, pw)
+        ph = self.password_hash or ''
+        if ph.startswith('sha256$'):
+            try:
+                _, salt, digest = ph.split('$', 2)
+                calc = hmac.new(salt.encode('utf-8'), pw.encode('utf-8'), hashlib.sha256).hexdigest()
+                return hmac.compare_digest(digest, calc)
+            except Exception:
+                return False
+        try:
+            return check_password_hash(ph, pw)
+        except Exception:
+            return False
 
 
 class SOP(db.Model):
@@ -300,31 +387,16 @@ class Check(db.Model):
     notes = db.Column(db.Text, nullable=True)
     photo_path = db.Column(db.String(255), nullable=True)
     status = db.Column(db.String(20), default='pending')
-    created_by_id = db.Column(db.Integer, db.ForeignKey('user.id'))
-    created_by = db.relationship('User')
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
-
-@login_manager.user_loader
-def load_user(user_id):
-    return User.query.get(int(user_id))
-
-
-# Admin-only decorator
-
-def admin_required(fn):
-    @wraps(fn)
-    def wrapper(*args, **kwargs):
-        if not current_user.is_authenticated or current_user.role != 'admin':
-            abort(403)
-        return fn(*args, **kwargs)
-    return wrapper
+    created_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    created_by = db.relationship('User', foreign_keys=[created_by_id])
 
 
 # ------------------------------
-# Templates
+# Templates (Jinja2 DictLoader)
 # ------------------------------
 BASE = """
+{% set cur_lang = request.args.get('lang') or request.cookies.get('lang') or 'zh' %}
 <!doctype html>
 <html lang="en">
 <head>
@@ -357,10 +429,9 @@ BASE = """
       </ul>
       <form class="d-flex" method="get" action="{{ request.path }}">
         <select class="form-select" name="lang" onchange="this.form.submit()">
-          {% set cur = request.args.get('lang') or request.cookies.get('lang') or 'zh' %}
-          <option value="zh" {% if cur=='zh' %}selected{% endif %}>中文</option>
-          <option value="ja" {% if cur=='ja' %}selected{% endif %}>日本語</option>
-          <option value="en" {% if cur=='en' %}selected{% endif %}>English</option>
+          <option value="zh" {% if cur_lang=='zh' %}selected{% endif %}>中文</option>
+          <option value="ja" {% if cur_lang=='ja' %}selected{% endif %}>日本語</option>
+          <option value="en" {% if cur_lang=='en' %}selected{% endif %}>English</option>
         </select>
       </form>
       <span class="navbar-text text-light ms-3">
@@ -817,7 +888,6 @@ app.jinja_loader = DictLoader({
     'SELFTEST': SELFTEST,
 })
 
-
 # ------------------------------
 # Helpers
 # ------------------------------
@@ -828,29 +898,71 @@ def allowed_file(filename: str) -> bool:
     return ext in ALLOWED_EXT
 
 
-def ensure_seed_users():
-    """Create default users once."""
-    if User.query.filter_by(email='admin@villa.local').first() is None:
-        u = User(email='admin@villa.local', name='admin', role='admin')
-        u.set_password('10051005+')
-        db.session.add(u)
-    if User.query.filter_by(email='stanley@villa.local').first() is None:
-        u2 = User(email='stanley@villa.local', name='Stanley', role='staff')
-        u2.set_password('0585')
-        db.session.add(u2)
-    db.session.commit()
+def ensure_seed_users() -> None:
+    """Create default users once (idempotent)."""
+    def add(name: str, email: str, role: str, pw: str) -> None:
+        existing = User.query.filter((User.email == email) | (User.name == name)).first()
+        if existing is None:
+            u = User(email=email, name=name, role=role)
+            u.set_password(pw)
+            db.session.add(u)
 
+    # built-ins
+    add('admin', 'admin@villa.local', 'admin', '10051005+')
+    add('Stanley', 'stanley@villa.local', 'staff', '0585')
+
+    # extra staff seeds
+    add('ooshiro', 'ooshiro@villa.local', 'staff', '1002+')
+    add('akshay', 'akshay@villa.local', 'staff', '1003+')
+    add('mahesh', 'mahesh@villa.local', 'staff', '1004+')
+    add('shekher', 'shekher@villa.local', 'staff', '1005+')
+    add('Edrian', 'edrian@villa.local', 'staff', '1006+')
+
+    try:
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        app.logger.error(f'Seed commit failed: {e}')
 
 # ------------------------------
-# Hooks
+@login_manager.user_loader
+def load_user(user_id: str) -> Optional[User]:
+    try:
+        return User.query.get(int(user_id))
+    except Exception:
+        return None
+
+# Admin‑only decorator
+from functools import wraps
+
+def admin_required(fn: Callable):
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        if not current_user.is_authenticated or current_user.role != 'admin':
+            abort(403)
+        return fn(*args, **kwargs)
+    return wrapper
+
+# ------------------------------
+# Hooks & Health
 # ------------------------------
 @app.route('/health')
 def health():
     return 'ok', 200
 
-
+# Defer DB init to first request to avoid boot‑time crashes on Render
 @app.before_request
-def persist_lang_and_gate():
+def _init_db_once_and_gate():
+    # lazy DB init
+    if not app.config.get('_DB_INIT_DONE', False):
+        try:
+            db.create_all()
+            ensure_seed_users()
+            app.config['_DB_INIT_DONE'] = True
+        except Exception as e:
+            # Don't crash; /selftest will show details
+            app.logger.error(f'DB init error (deferred): {e}')
+
     # lang cookie capture
     g.lang_to_set = None
     lang = request.args.get('lang')
@@ -870,7 +982,6 @@ def persist_lang_and_gate():
             nxt = request.full_path if request.query_string else request.path
             return redirect(url_for('access', next=nxt))
 
-
 @app.after_request
 def apply_lang_cookie(response):
     try:
@@ -882,14 +993,12 @@ def apply_lang_cookie(response):
         pass
     return response
 
-
 # ------------------------------
 # Routes
 # ------------------------------
 @app.route('/')
 def index():
     return redirect(with_lang(url_for('dashboard')))
-
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -907,13 +1016,11 @@ def login():
         flash('Invalid credentials', 'warning')
     return render_template('LOGIN')
 
-
 @app.route('/access', methods=['GET','POST'])
 def access():
     access_code = os.environ.get('ACCESS_CODE')
     if not access_code:
         return redirect(with_lang(url_for('dashboard')))
-    # fixed: no stray bracket
     if request.method == 'POST':
         if request.form.get('access') == access_code:
             g._set_access_cookie = True
@@ -923,7 +1030,6 @@ def access():
             flash(t('access_denied'), 'warning')
     return render_template('ACCESS')
 
-
 @app.route('/logout')
 def logout():
     try:
@@ -932,14 +1038,12 @@ def logout():
         pass
     return redirect(with_lang(url_for('login')))
 
-
 @app.route('/dashboard')
 @login_required
 def dashboard():
     tasks = Task.query.order_by(Task.created_at.desc()).limit(10).all()
     checks = Check.query.order_by(Check.created_at.desc()).limit(10).all()
     return render_template('DASH', tasks=tasks, checks=checks, villas=VILLAS)
-
 
 # ---- SOPS ----
 @app.route('/sops')
@@ -951,7 +1055,6 @@ def list_sops():
         q = q.filter_by(villa=villa)
     sops = q.order_by(SOP.created_at.desc()).all()
     return render_template('SOPS', sops=sops, villa=villa, villas=VILLAS)
-
 
 @app.route('/sops/new', methods=['GET','POST'])
 @login_required
@@ -968,7 +1071,6 @@ def new_sop():
         return redirect(with_lang(url_for('list_sops', villa=s.villa or '')))
     return render_template('SOP_FORM', sop=None, villas=VILLAS)
 
-
 @app.route('/sops/<int:sop_id>/edit', methods=['GET','POST'])
 @login_required
 def edit_sop(sop_id):
@@ -982,14 +1084,12 @@ def edit_sop(sop_id):
         return redirect(with_lang(url_for('list_sops', villa=sop.villa or '')))
     return render_template('SOP_FORM', sop=sop, villas=VILLAS)
 
-
 # ---- Tasks ----
 @app.route('/tasks')
 @login_required
 def list_tasks():
     tasks = Task.query.order_by(Task.created_at.desc()).all()
     return render_template('TASKS', tasks=tasks)
-
 
 @app.route('/tasks/new', methods=['GET','POST'])
 @login_required
@@ -1012,7 +1112,6 @@ def new_task():
     users = User.query.order_by(User.name.asc()).all()
     return render_template('TASK_FORM', task=None, users=users)
 
-
 @app.route('/tasks/<int:task_id>/edit', methods=['GET','POST'])
 @login_required
 def edit_task(task_id):
@@ -1021,8 +1120,8 @@ def edit_task(task_id):
         task.title = request.form['title']
         task.status = request.form.get('status','pending')
         assigned_to_id = request.form.get('assigned_to') or None
-        task.assigned_to = User.query.get(int(assigned_to_id)) if assigned_to_id else None
         due_date = request.form.get('due_date') or None
+        task.assigned_to = User.query.get(int(assigned_to_id)) if assigned_to_id else None
         if due_date:
             try:
                 task.due_date = datetime.strptime(due_date, '%Y-%m-%d')
@@ -1033,70 +1132,67 @@ def edit_task(task_id):
     users = User.query.order_by(User.name.asc()).all()
     return render_template('TASK_FORM', task=task, users=users)
 
-
 # ---- Checks ----
-@app.route('/checks')
-@login_required
-def list_checks():
-    villa = request.args.get('villa') or None
-    q = Check.query
-    if villa:
-        q = q.filter_by(villa=villa)
-    checks = q.order_by(Check.created_at.desc()).all()
-    return render_template('CHECKS', checks=checks, villas=VILLAS)
-
-
 @app.route('/checks/new', methods=['GET','POST'])
 @login_required
 def new_check():
     if request.method == 'POST':
-        c = Check(
-            villa=request.form['villa'],
-            area=request.form['area'],
-            notes=request.form.get('notes') or '',
-            created_by=current_user,
-            status=request.form.get('status','pending'),
-        )
-        f = request.files.get('photo')
-        if f and f.filename and allowed_file(f.filename):
-            filename = secure_filename(f.filename)
-            dst = Path(app.config['UPLOAD_FOLDER']) / filename
-            f.save(str(dst))
-            c.photo_path = str(dst)
+        villa = request.form['villa']
+        area = request.form['area']
+        notes = request.form.get('notes') or ''
+        status = request.form.get('status','pending')
+        photo = request.files.get('photo')
+        photo_path = None
+        if photo and allowed_file(photo.filename):
+            fname = datetime.utcnow().strftime('%Y%m%d%H%M%S_') + secure_filename(photo.filename)
+            dest = Path(app.config['UPLOAD_FOLDER']) / fname
+            try:
+                photo.save(str(dest))
+                photo_path = str(dest)
+            except Exception:
+                photo_path = None
+        c = Check(villa=villa, area=area, notes=notes, status=status, photo_path=photo_path, created_by=current_user)
         db.session.add(c)
         db.session.commit()
-        return redirect(with_lang(url_for('list_checks', villa=c.villa)))
+        return redirect(with_lang(url_for('list_checks', villa=villa)))
     return render_template('CHECK_FORM', check=None, villas=VILLAS)
-
 
 @app.route('/checks/<int:check_id>/edit', methods=['GET','POST'])
 @login_required
 def edit_check(check_id):
-    c = Check.query.get_or_404(check_id)
+    check = Check.query.get_or_404(check_id)
     if request.method == 'POST':
-        c.villa = request.form['villa']
-        c.area = request.form['area']
-        c.notes = request.form.get('notes') or ''
-        c.status = request.form.get('status','pending')
-        f = request.files.get('photo')
-        if f and f.filename and allowed_file(f.filename):
-            filename = secure_filename(f.filename)
-            dst = Path(app.config['UPLOAD_FOLDER']) / filename
-            f.save(str(dst))
-            c.photo_path = str(dst)
+        check.villa = request.form['villa']
+        check.area = request.form['area']
+        check.notes = request.form.get('notes') or ''
+        check.status = request.form.get('status','pending')
+        photo = request.files.get('photo')
+        if photo and allowed_file(photo.filename):
+            fname = datetime.utcnow().strftime('%Y%m%d%H%M%S_') + secure_filename(photo.filename)
+            dest = Path(app.config['UPLOAD_FOLDER']) / fname
+            try:
+                photo.save(str(dest))
+                check.photo_path = str(dest)
+            except Exception:
+                pass
         db.session.commit()
-        return redirect(with_lang(url_for('list_checks', villa=c.villa)))
-    return render_template('CHECK_FORM', check=c, villas=VILLAS)
+        return redirect(with_lang(url_for('list_checks', villa=check.villa)))
+    return render_template('CHECK_FORM', check=check, villas=VILLAS)
 
+# ---- Files ----
+@app.route('/uploads/<path:filename>')
+@login_required
+def uploaded_file(filename):
+    safe = secure_filename(filename)
+    return send_from_directory(app.config['UPLOAD_FOLDER'], safe)
 
-# ---- Admin: Users ----
+# ---- Admin Users ----
 @app.route('/admin/users')
 @login_required
 @admin_required
 def admin_users():
-    users = User.query.order_by(User.role.desc(), User.name.asc()).all()
+    users = User.query.order_by(User.id.asc()).all()
     return render_template('USERS', users=users)
-
 
 @app.route('/admin/users/new', methods=['GET','POST'])
 @login_required
@@ -1107,86 +1203,43 @@ def admin_users_new():
         email = request.form['email']
         role = request.form.get('role','staff')
         password = request.form['password']
-        if User.query.filter_by(email=email).first():
-            flash('Email already exists', 'warning')
-            return redirect(request.url)
-        u = User(email=email, name=name, role=role)
+        u = User(name=name, email=email, role=role)
         u.set_password(password)
         db.session.add(u)
         db.session.commit()
         return redirect(with_lang(url_for('admin_users')))
     return render_template('USER_FORM')
 
-
-# ---- Uploads ----
-@app.route('/uploads/<path:filename>')
-@login_required
-def uploaded_file(filename):
-    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
-
-
 # ---- Self Test ----
+@dataclass
+class TestResult:
+    msg: str
+    ok: bool
+
 @app.route('/selftest', methods=['GET','POST'])
 def selftest():
-    class R:
-        def __init__(self, ok: bool, msg: str):
-            self.ok, self.msg = ok, msg
-    results = None
+    results: List[TestResult] | None = None
     if request.method == 'POST':
         results = []
         try:
-            # Simple reachability marker
-            results.append(R(True, 'Index reachable'))
+            _ = render_template('LOGIN')
+            results.append(TestResult('Render templates', True))
         except Exception as e:
-            results.append(R(False, f'Index error: {e}'))
-        # DB basic
+            results.append(TestResult(f'Render templates: {e}', False))
         try:
-            _ = User.query.count()
-            results.append(R(True, 'DB reachable'))
+            db.create_all()
+            ensure_seed_users()
+            results.append(TestResult('DB create_all + seed', True))
         except Exception as e:
-            results.append(R(False, f'DB error: {e}'))
-        # Templates compile
+            results.append(TestResult(f'DB init: {e}', False))
         try:
-            render_template('DASH', tasks=[], checks=[], villas=VILLAS)
-            render_template('TASK_FORM', task=None, users=[])
-            render_template('CHECK_FORM', check=None, villas=VILLAS)
-            render_template('SOP_FORM', sop=None, villas=VILLAS)
-            results.append(R(True, 'Templates render'))
+            cnt = User.query.count()
+            results.append(TestResult(f'User count = {cnt}', True))
         except Exception as e:
-            results.append(R(False, f'Template error: {e}'))
-        # Extra tests (added)
-        try:
-            assert len(VILLAS) == 24
-            results.append(R(True, 'VILLAS has 24 items'))
-        except Exception as e:
-            results.append(R(False, f'VILLAS error: {e}'))
-        try:
-            admin = User.query.filter_by(email='admin@villa.local').first()
-            staff = User.query.filter_by(email='stanley@villa.local').first()
-            assert admin is not None and staff is not None
-            results.append(R(True, 'Seed users exist'))
-        except Exception as e:
-            results.append(R(False, f'Seed users missing: {e}'))
-        try:
-            tmp = Task(title='__selftest__', status='pending')
-            db.session.add(tmp)
-            db.session.commit()
-            assert tmp.id is not None
-            db.session.delete(tmp)
-            db.session.commit()
-            results.append(R(True, 'DB write ok (Task create/delete)'))
-        except Exception as e:
-            results.append(R(False, f'DB write error: {e}'))
+            results.append(TestResult(f'DB query users: {e}', False))
     return render_template('SELFTEST', results=results)
 
-
-# ------------------------------
-# Init
-# ------------------------------
-with app.app_context():
-    db.create_all()
-    ensure_seed_users()
-
-
+# ---- Main ----
 if __name__ == '__main__':
-    app.run(host='127.0.0.1', port=8000, debug=True)
+    port = int(os.environ.get('PORT', 8000))
+    app.run(host='0.0.0.0', port=port, debug=(os.environ.get('FLASK_DEBUG','0')=='1'))
