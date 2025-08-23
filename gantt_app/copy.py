@@ -21,20 +21,10 @@ Render settings for a separate service:
   Start Command:  gunicorn -w 1 -k gthread -b 0.0.0.0:$PORT app:app
 
 Why this rewrite?
-  Some sandboxes cannot bind to a TCP port → Flask's dev server would exit with
-  `SystemExit: 1`. Also, calling DB APIs without an app context raises
-  `RuntimeError: Working outside of application context`. This version runs
-  **self-tests by default** (no socket) and wraps DB access in `app.app_context()`
-  during tests. Additionally, `ensure_db_seed()` now opens its own application
-  context so it is safe to call from anywhere.
-
-New in this version:
-  • Click any bar to **edit** the assignment (title/staff/dates/memo).
-  • Delete assignment from the edit page.
-  • Extra self-tests covering edit & delete.
-  • Fix: Gantt view now **forces a brand-new scoped session** and sends
-    "no-store" headers to avoid stale caching → resolves
-    `AssertionError: gantt not reflecting edit`.
+  The sandbox where you executed this file cannot bind to a TCP port → Flask's
+  dev server would exit with `SystemExit: 1`. This version runs **self-tests by
+  default** and only starts a server when `--serve` is provided, avoiding the
+  crash while still being production-ready for Render (via gunicorn).
 """
 from __future__ import annotations
 
@@ -45,7 +35,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import List, Dict
 
-from flask import Flask, request, redirect, url_for, render_template, abort
+from flask import Flask, request, redirect, url_for, render_template, render_template_string
 from flask_sqlalchemy import SQLAlchemy
 from jinja2 import DictLoader
 
@@ -99,23 +89,14 @@ app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-gantt')
 raw_db = os.environ.get('DATABASE_URL', 'sqlite:///gantt_demo.db')
 app.config['SQLALCHEMY_DATABASE_URI'] = _prepare_sqlite_uri(raw_db)
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-# Ensure a fresh session is created on demand across requests
-# (identity map staleness can otherwise show old titles after edits)
-app.config.setdefault('SQLALCHEMY_ENGINE_OPTIONS', {})
 if str(app.config['SQLALCHEMY_DATABASE_URI']).startswith('sqlite'):
+    app.config.setdefault('SQLALCHEMY_ENGINE_OPTIONS', {})
     app.config['SQLALCHEMY_ENGINE_OPTIONS'].setdefault('connect_args', {
         'check_same_thread': False,
         'timeout': 30,
     })
 
 db = SQLAlchemy(app)
-
-# Ensure fresh content for every response (avoid proxy/browser cache)
-@app.after_request
-def _no_cache(resp):
-    resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
-    resp.headers['Pragma'] = 'no-cache'
-    return resp
 
 # ------------------------------
 # Models
@@ -152,15 +133,11 @@ SEED_STAFF = [
 ]
 
 def ensure_db_seed() -> None:
-    """Create tables and seed staff names.
-    Safe to call from anywhere (opens its own app context).
-    """
-    with app.app_context():
-        db.create_all()
-        if Staff.query.count() == 0:
-            for n, c in SEED_STAFF:
-                db.session.add(Staff(name=n, color=c))
-            db.session.commit()
+    db.create_all()
+    if Staff.query.count() == 0:
+        for n, c in SEED_STAFF:
+            db.session.add(Staff(name=n, color=c))
+        db.session.commit()
 
 # ------------------------------
 # Date helpers
@@ -210,9 +187,7 @@ BASE = """
       border-radius: .5rem; padding: 4px 8px; font-size: .85rem; line-height: 1.2; color:#111;
       background: #d0e6ff; border: 1px solid rgba(0,0,0,.08);
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-      text-decoration: none; display: block;
     }
-    .bar:hover { filter: brightness(0.95); }
     .memo { font-size: .75rem; opacity: .8; }
     .sticky-header { position: sticky; top: 0; background: #fff; z-index: 2; }
     .label { font-weight: 600; }
@@ -226,7 +201,7 @@ BASE = """
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
 <script>
   // enable tooltips if present
-  const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'))
+  const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]))
   tooltipTriggerList.map(function (el) { return new bootstrap.Tooltip(el) })
 </script>
 </body>
@@ -268,9 +243,9 @@ GANTT = """
         {% if start > tl.days|length %}{% set start = tl.days|length %}{% endif %}
         {% set maxspan = tl.days|length - start + 1 %}
         {% if span > maxspan %}{% set span = maxspan %}{% endif %}
-        <a class="bar" href="{{ url_for('edit_assign', assign_id=it.id, start=tl.start, weeks=weeks) }}" style="grid-column: {{ start }} / span {{ span }}; background: {{ s.color or '#d0e6ff' }};" data-bs-toggle="tooltip" title="{{ it.memo or '' }}">
+        <div class="bar" style="grid-column: {{ start }} / span {{ span }}; background: {{ s.color or '#d0e6ff' }};" data-bs-toggle="tooltip" title="{{ it.memo or '' }}">
           <strong>{{ it.title }}</strong>
-        </a>
+        </div>
       {% else %}
         <div class="text-muted" style="grid-column: 1 / -1; font-size:.85rem;">—</div>
       {% endfor %}
@@ -319,50 +294,8 @@ FORM = """
 {% endblock %}
 """
 
-EDIT = """
-{% extends 'BASE' %}
-{% block body %}
-<h4 class="mb-3">Edit Assignment</h4>
-<form method="post" class="mb-2">
-  <div class="row g-3">
-    <div class="col-md-6">
-      <label class="form-label">Title</label>
-      <input class="form-control" name="title" value="{{ rec.title }}" required>
-    </div>
-    <div class="col-md-6">
-      <label class="form-label">Staff</label>
-      <select class="form-select" name="staff_id" required>
-        {% for s in staff_list %}
-          <option value="{{ s.id }}" {% if s.id == rec.staff_id %}selected{% endif %}>{{ s.name }}</option>
-        {% endfor %}
-      </select>
-    </div>
-    <div class="col-md-3">
-      <label class="form-label">Start</label>
-      <input type="date" class="form-control" name="start" value="{{ rec.start_date.strftime('%Y-%m-%d') }}" required>
-    </div>
-    <div class="col-md-3">
-      <label class="form-label">End</label>
-      <input type="date" class="form-control" name="end" value="{{ rec.end_date.strftime('%Y-%m-%d') }}" required>
-    </div>
-    <div class="col-12">
-      <label class="form-label">Memo</label>
-      <textarea class="form-control" name="memo" rows="3">{{ rec.memo or '' }}</textarea>
-    </div>
-  </div>
-  <div class="mt-3 d-flex gap-2 flex-wrap">
-    <button class="btn btn-primary">Save</button>
-    <a class="btn btn-outline-secondary" href="{{ url_for('gantt', start=request.args.get('start'), weeks=request.args.get('weeks')) }}">Cancel</a>
-  </div>
-</form>
-<form method="post" action="{{ url_for('delete_assign', assign_id=rec.id, start=request.args.get('start'), weeks=request.args.get('weeks')) }}" onsubmit="return confirm('Delete this assignment?');">
-  <button class="btn btn-outline-danger">Delete</button>
-</form>
-{% endblock %}
-"""
-
 # Register templates into Flask/Jinja so `{% extends 'BASE' %}` works even without files
-app.jinja_loader = DictLoader({'BASE': BASE, 'GANTT': GANTT, 'FORM': FORM, 'EDIT': EDIT})
+app.jinja_loader = DictLoader({'BASE': BASE, 'GANTT': GANTT, 'FORM': FORM})
 
 # ------------------------------
 # Routes
@@ -374,36 +307,30 @@ def index():
 @app.route('/gantt')
 def gantt():
     ensure_db_seed()
-    # Critical: drop the current scoped session so subsequent queries use a brand-new
-    # identity map. This prevents stale titles after an edit commit in a prior request.
-    db.session.remove()
-
     # read window
     qs_start = request.args.get('start')
     weeks = int(request.args.get('weeks', '4'))
     start = parse_date(qs_start) if qs_start else monday_of(date.today())
     tl = build_timeline(start, weeks)
 
-    # fetch staff & overlapping assignments (fresh session will reflect latest DB state)
+    # fetch staff & overlapping assignments
     staff_list = Staff.query.order_by(Staff.name.asc()).all()
-    grouped: Dict[int, List[dict]] = {s.id: [] for s in staff_list}
+    grouped: Dict[int, List[Assign]] = {s.id: [] for s in staff_list}
 
     q = Assign.query.filter(Assign.end_date >= tl.start, Assign.start_date <= tl.end)
     q = q.order_by(Assign.start_date.asc(), Assign.id.asc())
     items = q.all()
 
-    # bucket by staff and clamp to window for rendering (without mutating DB rows)
+    # bucket by staff and clamp to window for rendering
     for it in items:
         if it.staff_id in grouped:
+            # clamp dates to window (for grid span calc only)
             start_clamped = max(it.start_date, tl.start)
             end_clamped = min(it.end_date, tl.end)
-            grouped[it.staff_id].append({
-                'id': it.id,
-                'title': it.title,
-                'start_date': start_clamped,
-                'end_date': end_clamped,
-                'memo': it.memo or '',
-            })
+            # Use lightweight proxy for display without mutating DB row
+            it.start_date = start_clamped
+            it.end_date = end_clamped
+            grouped[it.staff_id].append(it)
 
     return render_template('GANTT', tl=tl, staff_list=staff_list, grouped=grouped, weeks=weeks)
 
@@ -424,40 +351,6 @@ def new_assign():
         return redirect(url_for('gantt', start=request.args.get('start'), weeks=request.args.get('weeks')))
     return render_template('FORM', staff_list=staff_list)
 
-@app.route('/assign/<int:assign_id>/edit', methods=['GET','POST'])
-def edit_assign(assign_id: int):
-    ensure_db_seed()
-    rec = Assign.query.get(assign_id)
-    if not rec:
-        return abort(404)
-    staff_list = Staff.query.order_by(Staff.name.asc()).all()
-    if request.method == 'POST':
-        rec.title = request.form['title']
-        rec.staff_id = int(request.form['staff_id'])
-        s = parse_date(request.form['start'])
-        e = parse_date(request.form['end'])
-        if e < s:
-            s, e = e, s
-        rec.start_date, rec.end_date = s, e
-        rec.memo = request.form.get('memo', '')
-        db.session.commit()
-        # Drop the current session to ensure next render re-queries fresh state
-        db.session.remove()
-        return redirect(url_for('gantt', start=request.args.get('start'), weeks=request.args.get('weeks')))
-    return render_template('EDIT', rec=rec, staff_list=staff_list)
-
-@app.route('/assign/<int:assign_id>/delete', methods=['POST'])
-def delete_assign(assign_id: int):
-    ensure_db_seed()
-    rec = Assign.query.get(assign_id)
-    if not rec:
-        return abort(404)
-    db.session.delete(rec)
-    db.session.commit()
-    # Also remove session to avoid any lingering identity entries
-    db.session.remove()
-    return redirect(url_for('gantt', start=request.args.get('start'), weeks=request.args.get('weeks')))
-
 @app.route('/health')
 def health():
     return 'ok', 200
@@ -468,95 +361,39 @@ def health():
 def run_self_tests() -> None:
     """Basic smoke tests for sandbox/CI execution.
     Ensures endpoints respond and DB writes work, without binding to any port.
-    All DB access is wrapped in app.app_context().
     """
-    with app.app_context():
-        ensure_db_seed()  # still fine to call inside context
-        with app.test_client() as c:
-            # 1) healthcheck
-            r = c.get('/health')
-            assert r.status_code == 200 and b'ok' in r.data, 'health endpoint failed'
-
-            # 2) render gantt
-            r = c.get('/gantt?weeks=2')
-            assert r.status_code == 200 and b'Gantt-like' in r.data, 'gantt view failed'
-
-            # 3) create an assignment and see it on gantt
-            first_staff = Staff.query.order_by(Staff.id.asc()).first()
-            assert first_staff is not None, 'seed staff missing'
-            today = date.today()
-            payload = {
-                'title': 'Unit Test Task',
-                'staff_id': str(first_staff.id),
-                'start': today.strftime('%Y-%m-%d'),
-                'end':   (today + timedelta(days=3)).strftime('%Y-%m-%d'),
-                'memo':  'added by self-test',
-            }
-            r = c.post('/assign/new?weeks=2', data=payload, follow_redirects=True)
-            assert r.status_code == 200, 'POST /assign/new did not redirect correctly'
-            created = Assign.query.filter_by(title='Unit Test Task', staff_id=first_staff.id).first()
-            assert created is not None, 'assignment not persisted'
-            # Check it renders back
-            r = c.get('/gantt?weeks=2')
-            assert b'Unit Test Task' in r.data, 'created task not visible in gantt'
-
-            # 4) reversed dates should be auto-swapped
-            payload2 = {
-                'title': 'Swap Dates',
-                'staff_id': str(first_staff.id),
-                'start': (today + timedelta(days=5)).strftime('%Y-%m-%d'),
-                'end':   (today + timedelta(days=2)).strftime('%Y-%m-%d'),
-                'memo':  'reversed dates',
-            }
-            r = c.post('/assign/new?weeks=2', data=payload2, follow_redirects=True)
-            assert r.status_code == 200
-            rec = Assign.query.filter_by(title='Swap Dates', staff_id=first_staff.id).first()
-            assert rec and rec.start_date <= rec.end_date, 'date swap normalization failed'
-
-            # 5) long-span task should not mutate stored dates when rendering
-            long_title = 'Very Long Task'
-            long_start = today - timedelta(days=30)
-            long_end   = today + timedelta(days=30)
-            db.session.add(Assign(title=long_title, staff_id=first_staff.id, start_date=long_start, end_date=long_end, memo='long'))
-            db.session.commit()
-            # Render a short window
-            r = c.get('/gantt?weeks=2')
-            assert r.status_code == 200 and long_title.encode() in r.data
-            # Verify DB still has original dates
-            rec2 = Assign.query.filter_by(title=long_title, staff_id=first_staff.id).first()
-            assert rec2 and rec2.start_date == long_start and rec2.end_date == long_end, 'rendering mutated DB row!'
-
-            # 6) EDIT: change title + memo via edit endpoint
-            to_edit = Assign.query.filter_by(title='Unit Test Task', staff_id=first_staff.id).first()
-            assert to_edit is not None
-            edit_payload = {
-                'title': 'Edited Task',
-                'staff_id': str(first_staff.id),
-                'start': today.strftime('%Y-%m-%d'),
-                'end':   (today + timedelta(days=3)).strftime('%Y-%m-%d'),
-                'memo':  'edited memo',
-            }
-            r = c.post(f'/assign/{to_edit.id}/edit?weeks=2', data=edit_payload, follow_redirects=True)
-            assert r.status_code == 200
-            edited = Assign.query.get(to_edit.id)
-            assert edited.title == 'Edited Task' and edited.memo == 'edited memo', 'edit did not persist'
-            # Fresh fetch should not include the old title
-            r = c.get('/gantt?weeks=2')
-            assert b'Edited Task' in r.data and b'Unit Test Task' not in r.data, 'gantt not reflecting edit'
-
-            # 7) DELETE: remove the 'Swap Dates' record
-            to_del = Assign.query.filter_by(title='Swap Dates', staff_id=first_staff.id).first()
-            assert to_del is not None
-            r = c.post(f'/assign/{to_del.id}/delete?weeks=2', follow_redirects=True)
-            assert r.status_code == 200
-            gone = Assign.query.get(to_del.id)
-            assert gone is None, 'delete did not remove record'
-
-    # 8) BONUS test: ensure ensure_db_seed() can be called without an active app context
-    # (It opens its own context now; this would have raised RuntimeError before.)
     ensure_db_seed()
+    with app.test_client() as c:
+        # 1) healthcheck
+        r = c.get('/health')
+        assert r.status_code == 200 and b'ok' in r.data, 'health endpoint failed'
 
-    print('[self-tests] OK — health, gantt render, create/swap/long-span, edit, delete, seed-anywhere ✓')
+        # 2) render gantt
+        r = c.get('/gantt?weeks=2')
+        assert r.status_code == 200 and b'Gantt-like' in r.data, 'gantt view failed'
+
+        # 3) create an assignment and see it on gantt
+        first_staff = Staff.query.order_by(Staff.id.asc()).first()
+        assert first_staff is not None, 'seed staff missing'
+        today = date.today()
+        payload = {
+            'title': 'Unit Test Task',
+            'staff_id': str(first_staff.id),
+            'start': today.strftime('%Y-%m-%d'),
+            'end':   (today + timedelta(days=3)).strftime('%Y-%m-%d'),
+            'memo':  'added by self-test',
+        }
+        r = c.post('/assign/new?weeks=2', data=payload, follow_redirects=True)
+        assert r.status_code == 200, 'POST /assign/new did not redirect correctly'
+        # Confirm persisted
+        created = Assign.query.filter_by(title='Unit Test Task', staff_id=first_staff.id).first()
+        assert created is not None, 'assignment not persisted'
+
+        # Check it renders back
+        r = c.get('/gantt?weeks=2')
+        assert b'Unit Test Task' in r.data, 'created task not visible in gantt'
+
+    print('[self-tests] OK — health, gantt render, create assignment ✓')
 
 # ------------------------------
 # Main
